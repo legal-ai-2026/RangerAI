@@ -17,6 +17,9 @@ class RunStore(Protocol):
     def find_run_id_for_recommendation(self, recommendation_id: str) -> str | None:
         ...
 
+    def health(self) -> bool:
+        ...
+
 
 @dataclass
 class InMemoryRunStore:
@@ -34,6 +37,9 @@ class InMemoryRunStore:
                 if item.recommendation.recommendation_id == recommendation_id:
                     return record.run_id
         return None
+
+    def health(self) -> bool:
+        return True
 
 
 @dataclass
@@ -104,6 +110,14 @@ class PostgresRunStore:
                 (Jsonb(query),),
             ).fetchone()
         return None if row is None else str(row[0])
+
+    def health(self) -> bool:
+        try:
+            with self._connect() as conn:
+                conn.execute("SELECT 1").fetchone()
+            return True
+        except Exception:
+            return False
 
     def _connect(self) -> Any:
         import psycopg

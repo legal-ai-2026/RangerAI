@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 
+from src.agent.cache import redis_health
 from src.agent.dashboard import build_dashboard_summary
 from src.agent.store import build_run_store
 from src.agent.workflow import RangerWorkflow, compile_langgraph_probe
@@ -33,10 +34,16 @@ def healthz() -> dict[str, object]:
         "mistral": bool(settings.mistral_api_key),
         "openweather": bool(settings.openweather_api_key),
     }
+    falkordb_available = workflow.kg.health()
     return {
         "ok": True,
         "langgraph_importable": compile_langgraph_probe(),
-        "falkordb": workflow.kg.health(),
+        "falkordb": falkordb_available,
+        "dependencies_available": {
+            "run_store": store.health(),
+            "redis": redis_health(settings.redis_url),
+            "falkordb": falkordb_available,
+        },
         "providers_configured": providers,
         "openai_models": {
             "stt": settings.openai_stt_model,
