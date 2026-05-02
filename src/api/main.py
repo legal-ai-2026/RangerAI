@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 
 from src.agent.dashboard import build_dashboard_summary
-from src.agent.store import InMemoryRunStore
+from src.agent.store import build_run_store
 from src.agent.workflow import RangerWorkflow, compile_langgraph_probe
 from src.config import settings
 from src.contracts import (
@@ -14,7 +14,7 @@ from src.contracts import (
     RunRecord,
 )
 
-store = InMemoryRunStore()
+store = build_run_store()
 workflow = RangerWorkflow(store=store)
 
 app = FastAPI(
@@ -109,8 +109,7 @@ def decide_recommendation(
 
 
 def _run_id_for_recommendation(recommendation_id: str) -> str:
-    for record in store.records.values():
-        for item in record.recommendations:
-            if item.recommendation.recommendation_id == recommendation_id:
-                return record.run_id
+    run_id = store.find_run_id_for_recommendation(recommendation_id)
+    if run_id is not None:
+        return run_id
     raise HTTPException(status_code=404, detail="recommendation not found")

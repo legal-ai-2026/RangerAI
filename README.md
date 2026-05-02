@@ -54,9 +54,10 @@ FALKORDB_USERNAME=
 FALKORDB_PASSWORD=
 ```
 
-Current code still uses an in-memory run store and only actively connects to
-FalkorDB. Postgres/pgvector and Redis-backed persistence must be implemented
-before this service should be treated as operationally durable.
+Current code uses Postgres for run storage when the Postgres environment values
+are configured; otherwise it falls back to an in-memory store for local
+development. Redis-backed LangGraph checkpointing and pgvector retrieval are
+still pending.
 
 ## Local Run
 

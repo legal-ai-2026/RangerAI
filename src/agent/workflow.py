@@ -9,7 +9,7 @@ from src.agent.graph import (
     extract_state,
     make_resume_command,
 )
-from src.agent.store import InMemoryRunStore
+from src.agent.store import RunStore
 from src.contracts import (
     ApprovalResponse,
     IngestEnvelope,
@@ -23,7 +23,7 @@ from src.kg.client import KGClient
 class RangerWorkflow:
     def __init__(
         self,
-        store: InMemoryRunStore,
+        store: RunStore,
         providers: ProviderClients | None = None,
         kg: KGClient | None = None,
     ) -> None:
