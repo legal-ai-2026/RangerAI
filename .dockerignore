@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+.venv
+__pycache__
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.git
+assets/ground-truth
+assets/fixtures/audio
+assets/fixtures/or-pages
+*.wav
+*.mp3
+*.m4a
+*.mov
+*.mp4

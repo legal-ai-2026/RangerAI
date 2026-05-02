@@ -1,0 +1,37 @@
+.env
+.env.*
+!.env.example
+.venv/
+.uv-cache/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Sensitive demo data
+assets/ground-truth/*
+!assets/ground-truth/.gitkeep
+assets/fixtures/audio/*
+!assets/fixtures/audio/.gitkeep
+assets/fixtures/or-pages/*
+!assets/fixtures/or-pages/.gitkeep
+*.wav
+*.mp3
+*.m4a
+*.mov
+*.mp4
+*.jpg
+*.jpeg
+*.png
+*.pdf
+
+# Local state
+falkordb-data/
+redis-data/
+langfuse-data/

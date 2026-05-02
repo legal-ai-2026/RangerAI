@@ -1,0 +1,6 @@
+MODEL_CLAUDE_SONNET = "claude-sonnet-4-5"
+MODEL_DEEPGRAM_NOVA3 = "nova-3"
+MODEL_GPT_4O_TRANSCRIBE = "gpt-4o-transcribe"
+MODEL_MISTRAL_OCR = "mistral-ocr-2512"
+MODEL_OPENAI_MULTIMODAL = "gpt-4o"
+MODEL_OPENAI_WHISPER = "whisper-1"

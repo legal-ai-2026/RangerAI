@@ -1,0 +1,12 @@
+{
+  "instructor_id": "ri-demo-01",
+  "platoon_id": "plt-demo-01",
+  "mission_id": "mission-mountain-amb-01",
+  "phase": "Mountain",
+  "geo": {
+    "lat": 35.001,
+    "lon": -83.001,
+    "grid_mgrs": "17S DEMO"
+  },
+  "free_text": "Jones blew Phase Line Bird. Smith asleep at 0300. Garcia textbook ambush rehearsal."
+}
