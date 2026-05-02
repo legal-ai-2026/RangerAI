@@ -18,7 +18,7 @@ class KGClient:
 
     def connect(self) -> Any:
         if self._graph is None:
-            from falkordb import FalkorDB
+            from falkordb import FalkorDB  # type: ignore[import-untyped]
 
             self._graph = FalkorDB(
                 host=self.host,
