@@ -6,7 +6,7 @@
 2. Prefer typed Pydantic contracts over ad hoc dictionaries.
 3. Keep external model and database access behind adapters so tests remain deterministic.
 4. Do not add a frontend to this repository.
-5. Treat `/v1` routes as canonical; keep unversioned aliases only for early compatibility.
+5. Treat `/v1` routes as the only public API surface.
 
 ## Operational Path
 

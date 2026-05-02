@@ -126,3 +126,13 @@ def test_v1_decision_rejects_pending_recommendation() -> None:
     finally:
         main.store = previous_store
         main.workflow = previous_workflow
+
+
+def test_api_exposes_only_versioned_operational_routes() -> None:
+    paths = {route.path for route in main.app.routes}
+    assert "/v1/ingest" in paths
+    assert "/v1/runs/{run_id}" in paths
+    assert "/v1/recommendations/{recommendation_id}/decision" in paths
+    assert "/ingest" not in paths
+    assert "/runs/{run_id}" not in paths
+    assert "/healthz" not in paths

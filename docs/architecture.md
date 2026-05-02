@@ -126,8 +126,6 @@ Versioned paths are canonical:
 | `POST` | `/v1/lessons-learned` | Future idempotent webhook from System 3 |
 | `GET` | `/v1/healthz` | Dependency and configuration health |
 
-Unversioned paths currently remain as compatibility aliases during early development.
-
 ## Tech Stack
 
 Pinned core stack: LangGraph 1.1.0, OpenAI 1.54.0, Anthropic SDK 0.45.0, Instructor 1.7.0, Deepgram SDK 4.1.0, Mistral AI 1.5.0, FalkorDB 1.2.0, Redis 5.2.0, FastAPI 0.115.6, Pydantic 2.10.4, Uvicorn 0.34.0, Langfuse 2.60.0, Tenacity 9.0.0.

@@ -104,8 +104,6 @@ uv run mypy src
 - `POST /v1/recommendations/{recommendation_id}/decision` records instructor approval or rejection.
 - `GET /v1/healthz` reports configured providers, FalkorDB health, and LangGraph importability.
 
-Unversioned paths remain available as early-development compatibility aliases.
-
 ## Safety Defaults
 
 The API validates payloads with Pydantic v2, scrubs common PII patterns before LLM calls, validates targets against the observed roster, blocks high-risk recommendations, scores fairness spread, and never emits without instructor approval.

@@ -24,7 +24,7 @@ app = FastAPI(
 )
 
 
-@app.get("/healthz")
+@app.get("/v1/healthz")
 def healthz() -> dict[str, object]:
     providers = {
         "anthropic": bool(settings.anthropic_api_key),
@@ -50,24 +50,14 @@ def healthz() -> dict[str, object]:
     }
 
 
-@app.get("/v1/healthz")
-def v1_healthz() -> dict[str, object]:
-    return healthz()
-
-
-@app.post("/ingest", response_model=RunRecord, status_code=202)
+@app.post("/v1/ingest", response_model=RunRecord, status_code=202)
 async def ingest(envelope: IngestEnvelope, background_tasks: BackgroundTasks) -> RunRecord:
     record = workflow.create_run(envelope)
     background_tasks.add_task(workflow.process, record.run_id)
     return record
 
 
-@app.post("/v1/ingest", response_model=RunRecord, status_code=202)
-async def v1_ingest(envelope: IngestEnvelope, background_tasks: BackgroundTasks) -> RunRecord:
-    return await ingest(envelope, background_tasks)
-
-
-@app.get("/runs/{run_id}", response_model=RunRecord)
+@app.get("/v1/runs/{run_id}", response_model=RunRecord)
 def get_run(run_id: str) -> RunRecord:
     record = store.get(run_id)
     if record is None:
@@ -75,18 +65,12 @@ def get_run(run_id: str) -> RunRecord:
     return record
 
 
-@app.get("/v1/runs/{run_id}", response_model=RunRecord)
-def v1_get_run(run_id: str) -> RunRecord:
-    return get_run(run_id)
-
-
 @app.get("/v1/dashboard/runs/{run_id}", response_model=DashboardRunSummary)
 def get_dashboard_run(run_id: str) -> DashboardRunSummary:
     return build_dashboard_summary(get_run(run_id))
 
 
-@app.post("/recommendations/{run_id}/{recommendation_id}/approve", response_model=ApprovalResponse)
-def approve_recommendation(run_id: str, recommendation_id: str) -> ApprovalResponse:
+def _approve_recommendation(run_id: str, recommendation_id: str) -> ApprovalResponse:
     try:
         return workflow.approve(run_id, recommendation_id, approved=True)
     except KeyError as exc:
@@ -95,24 +79,21 @@ def approve_recommendation(run_id: str, recommendation_id: str) -> ApprovalRespo
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-@app.post("/recommendations/{run_id}/{recommendation_id}/reject", response_model=ApprovalResponse)
-def reject_recommendation(run_id: str, recommendation_id: str) -> ApprovalResponse:
+def _reject_recommendation(run_id: str, recommendation_id: str) -> ApprovalResponse:
     try:
         return workflow.approve(run_id, recommendation_id, approved=False)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@app.post("/recommendations/{recommendation_id}/approve", response_model=ApprovalResponse)
-def approve_recommendation_by_id(recommendation_id: str) -> ApprovalResponse:
+def _approve_recommendation_by_id(recommendation_id: str) -> ApprovalResponse:
     run_id = _run_id_for_recommendation(recommendation_id)
-    return approve_recommendation(run_id, recommendation_id)
+    return _approve_recommendation(run_id, recommendation_id)
 
 
-@app.post("/recommendations/{recommendation_id}/reject", response_model=ApprovalResponse)
-def reject_recommendation_by_id(recommendation_id: str) -> ApprovalResponse:
+def _reject_recommendation_by_id(recommendation_id: str) -> ApprovalResponse:
     run_id = _run_id_for_recommendation(recommendation_id)
-    return reject_recommendation(run_id, recommendation_id)
+    return _reject_recommendation(run_id, recommendation_id)
 
 
 @app.post("/v1/recommendations/{recommendation_id}/decision", response_model=ApprovalResponse)
@@ -123,8 +104,8 @@ def decide_recommendation(
     if decision.edited_recommendation is not None:
         raise HTTPException(status_code=501, detail="edited recommendations are not implemented yet")
     if decision.decision == "approve":
-        return approve_recommendation_by_id(recommendation_id)
-    return reject_recommendation_by_id(recommendation_id)
+        return _approve_recommendation_by_id(recommendation_id)
+    return _reject_recommendation_by_id(recommendation_id)
 
 
 def _run_id_for_recommendation(recommendation_id: str) -> str:
