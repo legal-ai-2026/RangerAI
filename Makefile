@@ -1,10 +1,4 @@
-.PHONY: demo test lint typecheck dev-services
-
-API_URL ?= http://localhost:8001
-DEMO_ENVELOPE ?= assets/fixtures/envelopes/mountain_phase_amb_01.json
-
-demo:
-	python tools/post_demo_ingest.py $(API_URL) $(DEMO_ENVELOPE)
+.PHONY: test lint typecheck dev-services
 
 test:
 	uv run pytest

@@ -1,6 +1,6 @@
 # Repository Guidelines
 
-See `AGENT.md` first. It is the operational entry point for AI coding agents and contains the project boundaries, ethics rules, guardrails, and demo workflow.
+See `AGENT.md` first. It is the operational entry point for AI coding agents and contains the project boundaries, ethics rules, guardrails, and workflow.
 
 ## Project Structure & Module Organization
 
@@ -12,7 +12,7 @@ This repository implements the Ranger School adversarial training agent: a LangG
 - `src/ingest/`: STT, OCR, entity extraction, and validation adapters.
 - `tests/`: unit and integration tests mirroring `src/`.
 - `assets/`: doctrine excerpts, terrain fixtures, clips, and OR booklet samples.
-- `tools/`: demo/operator helper scripts only; no frontend code.
+- `tools/`: operator helper scripts only; no frontend code.
 
 Keep shared contracts in one module, especially `IngestEnvelope`, `GeoPoint`, and `ScenarioRecommendation`.
 
@@ -42,7 +42,7 @@ Use `pytest`. Name tests by behavior, for example `test_rejects_hallucinated_sol
 
 This repository has no commit history yet. Use concise, imperative subjects such as `Add LangGraph ingest chain` or `Seed TC task schema`. Keep unrelated changes separate.
 
-Pull requests must include a summary, tests run, linked issue or demo milestone, and screenshots or clips for dashboard changes. Call out schema migrations, environment variables, policy changes, and new runtime APIs.
+Pull requests must include a summary, tests run, linked issue or operational milestone, and screenshots or clips for dashboard changes. Call out schema migrations, environment variables, policy changes, and new runtime APIs.
 
 ## Security & Configuration Tips
 

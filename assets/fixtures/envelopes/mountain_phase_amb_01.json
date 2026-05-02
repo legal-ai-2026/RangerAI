@@ -1,6 +1,6 @@
 {
-  "instructor_id": "ri-demo-01",
-  "platoon_id": "plt-demo-01",
+  "instructor_id": "ri-sample-01",
+  "platoon_id": "plt-sample-01",
   "mission_id": "mission-mountain-amb-01",
   "phase": "Mountain",
   "geo": {

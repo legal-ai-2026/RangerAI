@@ -4,7 +4,7 @@ This file is the entry point for AI coding agents working in this repository. Re
 
 ## What This Project Is
 
-**Spire Adversarial Training Agent** is the System 1 backend microservice for the xTech National Security Hackathon Track 3 mission-command demo. It ingests a Ranger Instructor's voice notes, photographed Operational Readiness booklet pages, and optional typed notes, then emits frontend-ready performance summaries and typed, doctrinally cited, fairness-checked `ScenarioRecommendation` objects for instructor approval.
+**Spire Adversarial Training Agent** is the System 1 backend microservice for Ranger School adversarial training support. It ingests a Ranger Instructor's voice notes, photographed Operational Readiness booklet pages, and optional typed notes, then emits frontend-ready performance summaries and typed, doctrinally cited, fairness-checked `ScenarioRecommendation` objects for instructor approval.
 
 Systems 2 and 3 are separate microservices. This service should communicate with them only through documented REST contracts in `docs/architecture.md`.
 
@@ -18,7 +18,7 @@ Systems 2 and 3 are separate microservices. This service should communicate with
 
 1. `README.md` for quickstart and API flow.
 2. `docs/architecture.md` for agent loop, contracts, and guardrails.
-3. `docs/implementation.md` for build priorities, cut list, and demo path.
+3. `docs/implementation.md` for build priorities, cut list, and operational path.
 4. `assets/ground-truth/` if present. Advisor notes override docs on Ranger workflow.
 
 ## Local Run
@@ -31,7 +31,7 @@ cp .env.example .env
 uv run uvicorn src.api.main:app --reload --port 8001
 ```
 
-`make demo` posts `assets/fixtures/envelopes/mountain_phase_amb_01.json` to the local API.
+Submit operationally valid `IngestEnvelope` payloads to `POST /v1/ingest`.
 
 ## Tests
 
@@ -53,7 +53,7 @@ Add prompt regression tests under `tests/prompts/` before changing guardrails or
 - `src/kg/`: FalkorDB client and Cypher writes.
 - `docs/`: architecture and implementation notes.
 - `assets/`: fixtures, doctrine, and ground-truth examples.
-- `tools/`: operator/demo helper scripts only.
+- `tools/`: operator helper scripts only.
 
 ## Coding Rules
 

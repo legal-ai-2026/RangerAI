@@ -8,15 +8,9 @@
 4. Do not add a frontend to this repository.
 5. Treat `/v1` routes as canonical; keep unversioned aliases only for early compatibility.
 
-## Demo Path
+## Operational Path
 
-Run the API locally, then execute:
-
-```bash
-make demo
-```
-
-The demo posts `assets/fixtures/envelopes/mountain_phase_amb_01.json` to `http://localhost:8001/v1/ingest`. Poll `GET /v1/runs/{run_id}` until recommendations are pending, then approve or reject a recommendation through `POST /v1/recommendations/{id}/decision`.
+Run the API process with provider keys and infrastructure connection values configured. Submit a validated `IngestEnvelope` to `POST /v1/ingest`, poll `GET /v1/runs/{run_id}` until recommendations are pending, then approve or reject each recommendation through `POST /v1/recommendations/{id}/decision`.
 
 ## Cut List
 
@@ -26,7 +20,7 @@ If time is constrained, cut in this order:
 2. Weather and terrain enrichment.
 3. Prompt regression breadth.
 4. Langfuse self-hosting.
-5. FalkorDB browser helper polish.
+5. Nonessential operator helper polish.
 
 Do not cut policy filtering, fairness scoring, Pydantic validation, or instructor approval.
 

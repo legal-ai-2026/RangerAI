@@ -27,7 +27,7 @@ Frontend or caller
     -> emit final recommendation and audit event
 ```
 
-The current implementation exposes the API-only backend and keeps the workflow in `src.agent.workflow.RangerWorkflow`. The target LangGraph module is `src/spire/graph.py`; `src/spire/app.py` currently re-exports the FastAPI app for compatibility with the documented run command.
+The current implementation exposes the API-only backend and keeps the workflow in `src.agent.workflow.RangerWorkflow`.
 
 ## Agent Loop
 
@@ -142,7 +142,7 @@ Every request should receive a `trace_id` that propagates to Langfuse and to a t
 
 ## Deployment Posture
 
-Hackathon demo runs locally with Docker Compose and synthetic data. Later stages target GovCloud/IL5-compatible deployments. The app is stateless except FalkorDB, Redis/checkpointing, Langfuse, and audit storage.
+The app process runs outside the Kubernetes infrastructure stack and connects to managed or cluster-hosted Postgres/pgvector, Redis, FalkorDB, Langfuse, and audit storage. Later stages target GovCloud/IL5-compatible deployments.
 
 ## Deliberate Non-Goals
 

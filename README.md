@@ -95,12 +95,6 @@ uv run ruff check .
 uv run mypy src
 ```
 
-For a local smoke test, post the sample ingest envelope:
-
-```bash
-make demo
-```
-
 ## API Flow
 
 - `POST /v1/ingest` returns a run id and processes STT/OCR/extraction/reasoning in a background task.
