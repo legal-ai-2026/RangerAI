@@ -42,6 +42,11 @@ def healthz() -> dict[str, object]:
             "stt": settings.openai_stt_model,
             "multimodal": settings.openai_multimodal_model,
         },
+        "infrastructure_configured": {
+            "postgres": settings.postgres_configured,
+            "redis": bool(settings.redis_url),
+            "falkordb": bool(settings.falkordb_host),
+        },
     }
 
 

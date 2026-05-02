@@ -12,13 +12,20 @@ class KGClient:
     host: str = settings.falkordb_host
     port: int = settings.falkordb_port
     graph_name: str = settings.falkordb_graph
+    username: str | None = settings.falkordb_username
+    password: str | None = settings.falkordb_password
     _graph: Any = field(default=None, init=False, repr=False)
 
     def connect(self) -> Any:
         if self._graph is None:
             from falkordb import FalkorDB
 
-            self._graph = FalkorDB(host=self.host, port=self.port).select_graph(self.graph_name)
+            self._graph = FalkorDB(
+                host=self.host,
+                port=self.port,
+                username=self.username,
+                password=self.password,
+            ).select_graph(self.graph_name)
         return self._graph
 
     def health(self) -> bool:
