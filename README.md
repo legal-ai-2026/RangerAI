@@ -59,6 +59,9 @@ are configured; otherwise it falls back to an in-memory store for local
 development. Redis-backed LangGraph checkpointing and pgvector retrieval are
 still pending.
 
+For local infrastructure only, use `docker/compose.dev.yaml`. The main app is
+started separately with `uvicorn`.
+
 ## Local Run
 
 1. Copy environment settings:
