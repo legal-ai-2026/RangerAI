@@ -121,6 +121,18 @@ class EvidenceRef(StrictModel):
     role: str = Field(min_length=1)
 
 
+class RecommendationScore(StrictModel):
+    learning_delta: float = Field(ge=0, le=1)
+    doctrinal_fit: float = Field(ge=0, le=1)
+    instructor_utility: float = Field(ge=0, le=1)
+    novelty_bonus: float = Field(ge=0, le=1)
+    safety_risk: float = Field(ge=0, le=1)
+    fatigue_overload: float = Field(ge=0, le=1)
+    fairness_penalty: float = Field(ge=0, le=1)
+    repetition_penalty: float = Field(ge=0, le=1)
+    total: float
+
+
 class ScenarioRecommendation(StrictModel):
     recommendation_id: str = Field(default_factory=lambda: str(uuid4()))
     target_soldier_id: str
@@ -137,6 +149,9 @@ class ScenarioRecommendation(StrictModel):
     evidence_refs: list[EvidenceRef] = Field(default_factory=list)
     model_context_refs: list[str] = Field(default_factory=list)
     policy_refs: list[str] = Field(default_factory=list)
+    intervention_id: str | None = None
+    learning_objective: str | None = None
+    score_breakdown: RecommendationScore | None = None
     created_by: str = "system-1"
     created_at_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

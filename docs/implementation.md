@@ -7,6 +7,7 @@
 3. Keep external model and database access behind adapters so tests remain deterministic.
 4. Do not add a frontend to this repository.
 5. Treat `/v1` routes as the only public API surface.
+6. Generate scenario recommendations from the curated intervention library before any free-form model fallback.
 
 ## Operational Path
 
@@ -32,6 +33,7 @@ Use fixtures and tests to preserve these defenses:
 - Doctrine contradiction: policy/prompt regression should catch missing or conflicting TC 3-21.76 references.
 - Repeated targeting: fairness spread must reject over-targeting a single soldier.
 - Hallucinated soldier: recommendations must validate against the observed roster.
+- Fatigue overreach: recommendations should expose fatigue penalties and avoid adding unsafe physical load.
 - Smudged OR page: uncertain OCR should remain `UNCERTAIN` and reviewable.
 - OPSEC leak: precise MGRS or protected personal data must be redacted before model calls and output.
 - Prompt injection: instructor text must not override guardrails.

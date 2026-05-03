@@ -134,8 +134,17 @@ Derived `Observation`:
 | `evidence_refs` | object array | Machine-readable locators for observations, doctrine, and context used by the output |
 | `model_context_refs` | string array | Run/context locators passed into the recommendation step |
 | `policy_refs` | string array | Policy/audit locators used by the decision path |
+| `intervention_id` | string or null | Curated intervention-library ID used to generate the recommendation |
+| `learning_objective` | string or null | Competency-oriented objective for the scenario modification |
+| `score_breakdown` | object or null | Transparent candidate score components before policy filtering |
 | `created_by` | string | Producing service, currently `system-1` |
 | `created_at_utc` | datetime | Recommendation creation timestamp |
+
+`score_breakdown` contains `learning_delta`, `doctrinal_fit`,
+`instructor_utility`, `novelty_bonus`, `safety_risk`, `fatigue_overload`,
+`fairness_penalty`, `repetition_penalty`, and `total`. The score ranks library
+candidates before deterministic policy and instructor review; it is not an
+approval signal.
 
 `RecommendationRecord` wraps a recommendation with:
 

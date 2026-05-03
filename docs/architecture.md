@@ -21,7 +21,7 @@ Frontend or caller
     -> extract typed observations
     -> idempotent FalkorDB MERGE writes
     -> enrich with weather, terrain, doctrine, and history
-    -> reason with Claude Sonnet 4.5 and tools
+    -> retrieve and score candidate scenario interventions
     -> deterministic policy filter
     -> instructor approval gate
     -> emit final recommendation and audit event
@@ -39,7 +39,7 @@ The current implementation exposes the API-only backend and keeps the workflow i
 | `extract` | Convert transcript/OCR/free text into `Observation[]` and task evaluations | Single source of truth before KG write |
 | `kg_write` | Idempotent `MERGE` into FalkorDB with vector-ready observations | Retries must not duplicate facts |
 | `enrich` | Retrieve weather, terrain, doctrine, student history, fairness counts | Gives the reasoner facts, not guesses |
-| `reason` | Claude Sonnet 4.5 with tool use; emits draft recommendations | The game-master step |
+| `reason` | Retrieval-first intervention library with transparent score breakdowns; optional LLM rationale fallback | Keeps scenario changes competency-linked and inspectable |
 | `policy_filter` | Safety, fairness, doctrine grounding, OPSEC checks | Blocks obvious failures before review |
 | `human_gate` | Instructor approve/edit/reject, target LangGraph `interrupt()` | Human judgment anchor |
 | `emit` | Persist final recommendation, audit, broadcast | Only publish path |
@@ -59,6 +59,8 @@ The reason node may call:
 - `platoon.curveball_count(platoon_id, window_h)` for fairness.
 
 `recommend.draft` is not a free-form tool; it is the typed final output schema.
+The current deterministic path uses a curated intervention library before any
+open-ended model generation.
 
 ## Knowledge Graph
 
@@ -101,6 +103,18 @@ that document as the cross-app contract.
 Inbound `IngestEnvelope` includes `envelope_id`, `instructor_id`, `platoon_id`, `mission_id`, `phase`, `timestamp_utc`, `geo`, optional `audio_b64`, `image_b64[]`, and optional `free_text`. Inbound models use Pydantic v2 with `extra="forbid"`.
 
 Outbound `ScenarioRecommendation` includes `target_soldier_id`, `rationale`, `development_edge`, `proposed_modification`, non-empty `doctrine_refs`, `safety_checks`, `estimated_duration_min`, `requires_resources`, `risk_level`, and `fairness_score`.
+
+The recommendation engine is retrieval-first. It maps observations to curated
+scenario interventions keyed by task and competency, then scores candidates as:
+
+```text
+learning_delta + doctrinal_fit + instructor_utility + novelty_bonus
+- safety_risk - fatigue_overload - fairness_penalty - repetition_penalty
+```
+
+`ScenarioRecommendation.score_breakdown` carries those components for review,
+and `intervention_id` / `learning_objective` preserve the link to the library
+item that produced the recommendation.
 
 Canonical IDs are `soldier_id`, `patrol_id`, `mission_id`, and `platoon_id`. Do not mint local substitutes for cross-system entities.
 

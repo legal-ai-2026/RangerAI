@@ -10,20 +10,14 @@ from typing import Any, Literal, cast
 
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from src.agent.interventions import draft_intervention_recommendations
 from src.agent.models import (
     MODEL_DEEPGRAM_NOVA3,
     MODEL_GPT_4O_TRANSCRIBE,
     MODEL_MISTRAL_OCR,
 )
 from src.config import Settings, settings
-from src.contracts import (
-    DevelopmentEdge,
-    ORBookletPage,
-    ORBookletRow,
-    Observation,
-    RiskLevel,
-    ScenarioRecommendation,
-)
+from src.contracts import ORBookletPage, ORBookletRow, Observation, ScenarioRecommendation
 from src.ingest.scrub import scrub_sensitive_text
 
 
@@ -77,6 +71,14 @@ class ProviderClients:
     async def draft_recommendations(
         self, observations: list[Observation]
     ) -> list[ScenarioRecommendation]:
+        if not any(
+            item.soldier_id not in {"", "UNKNOWN"} and item.rating != "UNCERTAIN"
+            for item in observations
+        ):
+            return []
+        library_recommendations = heuristic_recommendations(observations)
+        if library_recommendations:
+            return library_recommendations
         if self.settings.anthropic_api_key:
             try:
                 payload = [item.model_dump(mode="json") for item in observations]
@@ -88,7 +90,7 @@ class ProviderClients:
                 return [ScenarioRecommendation.model_validate(item) for item in extracted]
             except Exception:
                 pass
-        return heuristic_recommendations(observations)
+        return []
 
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=0.2, max=2))
     def _deepgram_transcribe(self, audio_b64: str) -> str:
@@ -325,36 +327,7 @@ def heuristic_observations(text: str) -> list[Observation]:
 
 
 def heuristic_recommendations(observations: list[Observation]) -> list[ScenarioRecommendation]:
-    recommendations: list[ScenarioRecommendation] = []
-    for obs in observations:
-        edge = (
-            DevelopmentEdge.communications
-            if obs.task_code == "MV-2"
-            else DevelopmentEdge.team_accountability
-        )
-        if obs.task_code == "AM-4":
-            edge = DevelopmentEdge.fire_control
-        recommendations.append(
-            ScenarioRecommendation(
-                target_soldier_id=obs.soldier_id,
-                rationale=(
-                    f"{obs.soldier_id} showed a development signal on {obs.task_code}: "
-                    f"{obs.note[:180]}"
-                ),
-                development_edge=edge,
-                proposed_modification=(
-                    "Assign a short, instructor-approved scenario inject that forces the student "
-                    "to rehearse the observed task under controlled fatigue and time pressure."
-                ),
-                doctrine_refs=[f"TC 3-21.76 {obs.task_code}"],
-                safety_checks=["No immersion, live-fire, or unsupervised movement added."],
-                estimated_duration_min=15,
-                requires_resources=[],
-                risk_level=RiskLevel.low,
-                fairness_score=1.0,
-            )
-        )
-    return recommendations
+    return draft_intervention_recommendations(observations)
 
 
 def _sentence_for_name(text: str, name: str) -> str:

@@ -132,6 +132,12 @@ make infra-health
 - `POST /v1/outbox/{event_id}/published` marks an outbox event as published.
 - `GET /v1/healthz` reports configured providers, FalkorDB health, and LangGraph importability.
 
+Recommendations are generated from a curated, retrieval-first scenario
+intervention library before model fallback. Each recommendation can carry an
+`intervention_id`, `learning_objective`, and `score_breakdown` so instructors
+can inspect learning value, doctrinal fit, utility, safety, fatigue, fairness,
+and repetition tradeoffs before approval.
+
 ## Safety Defaults
 
 The API validates payloads with Pydantic v2, scrubs common PII patterns before LLM calls, validates targets against the observed roster, blocks high-risk recommendations, scores fairness spread, and never emits without instructor approval.
