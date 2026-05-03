@@ -178,3 +178,30 @@ class DashboardRunSummary(StrictModel):
     approved_recommendations: int
     platoon_readiness_score: float = Field(ge=0, le=100)
     soldiers: list[SoldierPerformanceSummary] = Field(default_factory=list)
+
+
+class AuditEvent(StrictModel):
+    event_id: str = Field(default_factory=lambda: str(uuid4()))
+    run_id: str
+    event_type: Literal[
+        "run_accepted",
+        "run_processing_started",
+        "run_status_updated",
+        "run_failed",
+        "run_lease_blocked",
+        "recommendation_decision_recorded",
+    ]
+    actor_id: str | None = None
+    recommendation_id: str | None = None
+    payload: dict[str, object] = Field(default_factory=dict)
+    timestamp_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class OutboxEvent(StrictModel):
+    event_id: str = Field(default_factory=lambda: str(uuid4()))
+    event_type: Literal["recommendation.approved", "recommendation.rejected"]
+    aggregate_id: str
+    run_id: str
+    payload: dict[str, object] = Field(default_factory=dict)
+    status: Literal["pending", "published"] = "pending"
+    timestamp_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

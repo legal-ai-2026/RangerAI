@@ -64,6 +64,16 @@ def test_ingest_to_approval_workflow() -> None:
         approved=True,
     )
     assert approval.status == "approved"
+    audit_event_types = {event.event_type for event in store.list_audit_events(record.run_id)}
+    assert {
+        "run_accepted",
+        "run_processing_started",
+        "run_status_updated",
+        "recommendation_decision_recorded",
+    }.issubset(audit_event_types)
+    assert [
+        event.event_type for event in store.list_outbox_events(record.run_id)
+    ] == ["recommendation.approved"]
 
 
 def test_dashboard_summary_includes_soldier_metrics_and_recommendations() -> None:
@@ -133,6 +143,7 @@ def test_api_exposes_only_versioned_operational_routes() -> None:
     paths = {route.path for route in main.app.routes}
     assert "/v1/ingest" in paths
     assert "/v1/runs/{run_id}" in paths
+    assert "/v1/runs/{run_id}/audit" in paths
     assert "/v1/recommendations/{recommendation_id}/decision" in paths
     assert "/ingest" not in paths
     assert "/runs/{run_id}" not in paths

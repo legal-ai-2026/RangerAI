@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from src.config import Settings, settings
-from src.contracts import RunRecord
+from src.contracts import AuditEvent, OutboxEvent, RunRecord
 
 
 class RunStore(Protocol):
@@ -20,10 +20,24 @@ class RunStore(Protocol):
     def health(self) -> bool:
         ...
 
+    def append_audit_event(self, event: AuditEvent) -> None:
+        ...
+
+    def list_audit_events(self, run_id: str) -> list[AuditEvent]:
+        ...
+
+    def append_outbox_event(self, event: OutboxEvent) -> None:
+        ...
+
+    def list_outbox_events(self, run_id: str) -> list[OutboxEvent]:
+        ...
+
 
 @dataclass
 class InMemoryRunStore:
     records: dict[str, RunRecord] = field(default_factory=dict)
+    audit_events: dict[str, list[AuditEvent]] = field(default_factory=dict)
+    outbox_events: dict[str, list[OutboxEvent]] = field(default_factory=dict)
 
     def put(self, record: RunRecord) -> None:
         self.records[record.run_id] = record
@@ -40,6 +54,24 @@ class InMemoryRunStore:
 
     def health(self) -> bool:
         return True
+
+    def append_audit_event(self, event: AuditEvent) -> None:
+        self.audit_events.setdefault(event.run_id, []).append(event)
+
+    def list_audit_events(self, run_id: str) -> list[AuditEvent]:
+        return sorted(
+            self.audit_events.get(run_id, []),
+            key=lambda event: event.timestamp_utc,
+        )
+
+    def append_outbox_event(self, event: OutboxEvent) -> None:
+        self.outbox_events.setdefault(event.run_id, []).append(event)
+
+    def list_outbox_events(self, run_id: str) -> list[OutboxEvent]:
+        return sorted(
+            self.outbox_events.get(run_id, []),
+            key=lambda event: event.timestamp_utc,
+        )
 
 
 @dataclass
@@ -119,6 +151,130 @@ class PostgresRunStore:
         except Exception:
             return False
 
+    def append_audit_event(self, event: AuditEvent) -> None:
+        from psycopg.types.json import Jsonb
+
+        with self._connect() as conn:
+            self._ensure_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO ranger_audit_events (
+                    event_id,
+                    run_id,
+                    event_type,
+                    actor_id,
+                    recommendation_id,
+                    payload,
+                    timestamp_utc
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (event_id) DO NOTHING
+                """,
+                (
+                    event.event_id,
+                    event.run_id,
+                    event.event_type,
+                    event.actor_id,
+                    event.recommendation_id,
+                    Jsonb(event.payload),
+                    event.timestamp_utc,
+                ),
+            )
+
+    def list_audit_events(self, run_id: str) -> list[AuditEvent]:
+        with self._connect() as conn:
+            self._ensure_schema(conn)
+            rows = conn.execute(
+                """
+                SELECT
+                    event_id,
+                    run_id,
+                    event_type,
+                    actor_id,
+                    recommendation_id,
+                    payload,
+                    timestamp_utc
+                FROM ranger_audit_events
+                WHERE run_id = %s
+                ORDER BY timestamp_utc ASC
+                """,
+                (run_id,),
+            ).fetchall()
+        return [
+            AuditEvent(
+                event_id=row[0],
+                run_id=row[1],
+                event_type=row[2],
+                actor_id=row[3],
+                recommendation_id=row[4],
+                payload=row[5],
+                timestamp_utc=row[6],
+            )
+            for row in rows
+        ]
+
+    def append_outbox_event(self, event: OutboxEvent) -> None:
+        from psycopg.types.json import Jsonb
+
+        with self._connect() as conn:
+            self._ensure_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO ranger_outbox_events (
+                    event_id,
+                    event_type,
+                    aggregate_id,
+                    run_id,
+                    payload,
+                    status,
+                    timestamp_utc
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (event_id) DO NOTHING
+                """,
+                (
+                    event.event_id,
+                    event.event_type,
+                    event.aggregate_id,
+                    event.run_id,
+                    Jsonb(event.payload),
+                    event.status,
+                    event.timestamp_utc,
+                ),
+            )
+
+    def list_outbox_events(self, run_id: str) -> list[OutboxEvent]:
+        with self._connect() as conn:
+            self._ensure_schema(conn)
+            rows = conn.execute(
+                """
+                SELECT
+                    event_id,
+                    event_type,
+                    aggregate_id,
+                    run_id,
+                    payload,
+                    status,
+                    timestamp_utc
+                FROM ranger_outbox_events
+                WHERE run_id = %s
+                ORDER BY timestamp_utc ASC
+                """,
+                (run_id,),
+            ).fetchall()
+        return [
+            OutboxEvent(
+                event_id=row[0],
+                event_type=row[1],
+                aggregate_id=row[2],
+                run_id=row[3],
+                payload=row[4],
+                status=row[5],
+                timestamp_utc=row[6],
+            )
+            for row in rows
+        ]
+
     def _connect(self) -> Any:
         import psycopg
 
@@ -153,6 +309,44 @@ class PostgresRunStore:
             """
             CREATE INDEX IF NOT EXISTS ranger_runs_record_gin_idx
             ON ranger_runs USING gin (record jsonb_path_ops)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ranger_audit_events (
+                event_id text PRIMARY KEY,
+                run_id text NOT NULL,
+                event_type text NOT NULL,
+                actor_id text,
+                recommendation_id text,
+                payload jsonb NOT NULL,
+                timestamp_utc timestamptz NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS ranger_audit_events_run_id_idx
+            ON ranger_audit_events (run_id, timestamp_utc)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ranger_outbox_events (
+                event_id text PRIMARY KEY,
+                event_type text NOT NULL,
+                aggregate_id text NOT NULL,
+                run_id text NOT NULL,
+                payload jsonb NOT NULL,
+                status text NOT NULL,
+                timestamp_utc timestamptz NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS ranger_outbox_events_status_idx
+            ON ranger_outbox_events (status, timestamp_utc)
             """
         )
         self._schema_ready = True

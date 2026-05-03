@@ -13,7 +13,9 @@ from src.agent.graph import (
 from src.agent.store import RunStore
 from src.contracts import (
     ApprovalResponse,
+    AuditEvent,
     IngestEnvelope,
+    OutboxEvent,
     RunRecord,
     RunStatus,
 )
@@ -38,6 +40,18 @@ class RangerWorkflow:
     def create_run(self, ingest: IngestEnvelope) -> RunRecord:
         record = RunRecord(run_id=str(uuid4()), status=RunStatus.accepted, ingest=ingest)
         self.store.put(record)
+        self.store.append_audit_event(
+            AuditEvent(
+                run_id=record.run_id,
+                event_type="run_accepted",
+                actor_id=ingest.instructor_id,
+                payload={
+                    "mission_id": ingest.mission_id,
+                    "platoon_id": ingest.platoon_id,
+                    "phase": ingest.phase.value,
+                },
+            )
+        )
         return record
 
     async def process(self, run_id: str) -> None:
@@ -46,11 +60,25 @@ class RangerWorkflow:
             record = self._require_run(run_id)
             record.errors.append("run is already being processed")
             self.store.put(record)
+            self.store.append_audit_event(
+                AuditEvent(
+                    run_id=run_id,
+                    event_type="run_lease_blocked",
+                    actor_id=record.ingest.instructor_id,
+                )
+            )
             return
         record = self._require_run(run_id)
         try:
             record.status = RunStatus.processing
             self.store.put(record)
+            self.store.append_audit_event(
+                AuditEvent(
+                    run_id=run_id,
+                    event_type="run_processing_started",
+                    actor_id=record.ingest.instructor_id,
+                )
+            )
             state: RangerState = {
                 "run_id": run_id,
                 "ingest": record.ingest,
@@ -63,15 +91,31 @@ class RangerWorkflow:
                 "errors": record.errors,
             }
             output = await self.graph.ainvoke(state, config=self._graph_config(run_id))
-            self._put_state(
+            updated = self._put_state(
                 run_id,
                 extract_state(output, graph=self.graph, config=self._graph_config(run_id)),
+            )
+            self.store.append_audit_event(
+                AuditEvent(
+                    run_id=run_id,
+                    event_type="run_status_updated",
+                    actor_id=record.ingest.instructor_id,
+                    payload={"status": updated.status.value},
+                )
             )
         except Exception as exc:
             record = self._require_run(run_id)
             record.status = RunStatus.failed
             record.errors.append(str(exc))
             self.store.put(record)
+            self.store.append_audit_event(
+                AuditEvent(
+                    run_id=run_id,
+                    event_type="run_failed",
+                    actor_id=record.ingest.instructor_id,
+                    payload={"error": str(exc)},
+                )
+            )
         finally:
             lease.release()
 
@@ -102,6 +146,28 @@ class RangerWorkflow:
             )
             for item in updated.recommendations:
                 if item.recommendation.recommendation_id == recommendation_id:
+                    self.store.append_audit_event(
+                        AuditEvent(
+                            run_id=run_id,
+                            event_type="recommendation_decision_recorded",
+                            actor_id=record.ingest.instructor_id,
+                            recommendation_id=recommendation_id,
+                            payload={"status": item.status},
+                        )
+                    )
+                    if item.status in {"approved", "rejected"}:
+                        self.store.append_outbox_event(
+                            OutboxEvent(
+                                event_type=f"recommendation.{item.status}",
+                                aggregate_id=recommendation_id,
+                                run_id=run_id,
+                                payload={
+                                    "recommendation_id": recommendation_id,
+                                    "status": item.status,
+                                    "target_soldier_id": item.recommendation.target_soldier_id,
+                                },
+                            )
+                        )
                     return ApprovalResponse(
                         run_id=run_id,
                         recommendation_id=recommendation_id,

@@ -120,6 +120,7 @@ Versioned paths are canonical:
 |---|---|---|
 | `POST` | `/v1/ingest` | Submit an envelope and start processing |
 | `GET` | `/v1/runs/{run_id}` | Inspect run state and pending recommendations |
+| `GET` | `/v1/runs/{run_id}/audit` | Inspect run lifecycle and instructor decision audit events |
 | `GET` | `/v1/dashboard/runs/{run_id}` | Frontend-ready platoon and soldier performance summary |
 | `POST` | `/v1/recommendations/{id}/decision` | Instructor approve/reject/edit decision |
 | `GET` | `/v1/soldier/{id}/training-trajectory` | Future read-only endpoint for System 2 |

@@ -1,9 +1,11 @@
 from src.agent.store import InMemoryRunStore, PostgresRunStore, build_run_store
 from src.config import Settings
 from src.contracts import (
+    AuditEvent,
     DevelopmentEdge,
     GeoPoint,
     IngestEnvelope,
+    OutboxEvent,
     Phase,
     PolicyDecision,
     RecommendationRecord,
@@ -67,3 +69,19 @@ def test_memory_store_finds_run_by_recommendation_id() -> None:
 
     assert store.find_run_id_for_recommendation("rec-1") == "run-1"
     assert store.find_run_id_for_recommendation("missing") is None
+
+
+def test_memory_store_tracks_audit_and_outbox_events() -> None:
+    store = InMemoryRunStore()
+    audit = AuditEvent(run_id="run-1", event_type="run_accepted")
+    outbox = OutboxEvent(
+        event_type="recommendation.approved",
+        aggregate_id="rec-1",
+        run_id="run-1",
+    )
+
+    store.append_audit_event(audit)
+    store.append_outbox_event(outbox)
+
+    assert store.list_audit_events("run-1") == [audit]
+    assert store.list_outbox_events("run-1") == [outbox]

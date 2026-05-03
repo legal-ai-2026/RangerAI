@@ -9,6 +9,7 @@ from src.agent.workflow import RangerWorkflow, compile_langgraph_probe
 from src.config import settings
 from src.contracts import (
     ApprovalResponse,
+    AuditEvent,
     DashboardRunSummary,
     IngestEnvelope,
     RecommendationDecision,
@@ -75,6 +76,12 @@ def get_run(run_id: str) -> RunRecord:
 @app.get("/v1/dashboard/runs/{run_id}", response_model=DashboardRunSummary)
 def get_dashboard_run(run_id: str) -> DashboardRunSummary:
     return build_dashboard_summary(get_run(run_id))
+
+
+@app.get("/v1/runs/{run_id}/audit", response_model=list[AuditEvent])
+def get_run_audit(run_id: str) -> list[AuditEvent]:
+    get_run(run_id)
+    return store.list_audit_events(run_id)
 
 
 def _approve_recommendation(run_id: str, recommendation_id: str) -> ApprovalResponse:

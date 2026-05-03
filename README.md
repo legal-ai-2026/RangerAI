@@ -105,6 +105,7 @@ uv run mypy src
 
 - `POST /v1/ingest` returns a run id and processes STT/OCR/extraction/reasoning in a background task.
 - `GET /v1/runs/{run_id}` returns transcript, OCR pages, observations, KG write summary, recommendation records, and errors.
+- `GET /v1/runs/{run_id}/audit` returns durable run lifecycle and recommendation decision events.
 - `GET /v1/dashboard/runs/{run_id}` returns frontend-ready platoon and soldier performance metrics plus active recommendations.
 - `POST /v1/recommendations/{recommendation_id}/decision` records instructor approval or rejection.
 - `GET /v1/healthz` reports configured providers, FalkorDB health, and LangGraph importability.
