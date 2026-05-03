@@ -6,22 +6,9 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from io import BytesIO
-from typing import Any
+from typing import Any, Literal, cast
 
-try:
-    from tenacity import retry, stop_after_attempt, wait_exponential
-except ImportError:  # pragma: no cover - exercised only in minimal local environments
-    def retry(*_args, **_kwargs):
-        def decorator(func):
-            return func
-
-        return decorator
-
-    def stop_after_attempt(_attempts: int):
-        return None
-
-    def wait_exponential(**_kwargs):
-        return None
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from src.agent.models import (
     MODEL_DEEPGRAM_NOVA3,
@@ -29,7 +16,14 @@ from src.agent.models import (
     MODEL_MISTRAL_OCR,
 )
 from src.config import Settings, settings
-from src.contracts import ORBookletPage, ORBookletRow, Observation, ScenarioRecommendation
+from src.contracts import (
+    DevelopmentEdge,
+    ORBookletPage,
+    ORBookletRow,
+    Observation,
+    RiskLevel,
+    ScenarioRecommendation,
+)
 from src.ingest.scrub import scrub_sensitive_text
 
 
@@ -196,7 +190,7 @@ class ProviderClients:
             raise ProviderError("mistralai package is not installed") from exc
         if not self.settings.mistral_api_key:
             raise ProviderError("MISTRAL_API_KEY is not configured")
-        client = Mistral(api_key=self.settings.mistral_api_key)
+        client = cast(Any, Mistral(api_key=self.settings.mistral_api_key))
         document = {
             "type": "image_url",
             "image_url": f"data:image/jpeg;base64,{image_b64}",
@@ -301,7 +295,9 @@ def heuristic_observations(text: str) -> list[Observation]:
     known = {"Jones": "MV-2", "Smith": "PB-7", "Garcia": "AM-4"}
     for name, task in known.items():
         if name.lower() in text.lower():
-            rating = "GO" if name == "Garcia" or "textbook" in text.lower() else "NOGO"
+            rating: Literal["GO", "NOGO", "UNCERTAIN"] = (
+                "GO" if name == "Garcia" or "textbook" in text.lower() else "NOGO"
+            )
             observations.append(
                 Observation(
                     soldier_id=name,
@@ -321,9 +317,13 @@ def heuristic_observations(text: str) -> list[Observation]:
 def heuristic_recommendations(observations: list[Observation]) -> list[ScenarioRecommendation]:
     recommendations: list[ScenarioRecommendation] = []
     for obs in observations:
-        edge = "communications" if obs.task_code == "MV-2" else "team_accountability"
+        edge = (
+            DevelopmentEdge.communications
+            if obs.task_code == "MV-2"
+            else DevelopmentEdge.team_accountability
+        )
         if obs.task_code == "AM-4":
-            edge = "fire_control"
+            edge = DevelopmentEdge.fire_control
         recommendations.append(
             ScenarioRecommendation(
                 target_soldier_id=obs.soldier_id,
@@ -340,7 +340,7 @@ def heuristic_recommendations(observations: list[Observation]) -> list[ScenarioR
                 safety_checks=["No immersion, live-fire, or unsupervised movement added."],
                 estimated_duration_min=15,
                 requires_resources=[],
-                risk_level="low",
+                risk_level=RiskLevel.low,
                 fairness_score=1.0,
             )
         )
