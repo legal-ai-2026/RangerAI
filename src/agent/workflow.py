@@ -175,6 +175,15 @@ class RangerWorkflow:
                                 "recommendation_id": recommendation_id,
                                 "status": decision_status,
                                 "target_soldier_id": item.recommendation.target_soldier_id,
+                                "target_ids": item.recommendation.target_ids.model_dump(
+                                    mode="json", exclude_none=True
+                                ),
+                                "evidence_refs": [
+                                    ref.model_dump(mode="json")
+                                    for ref in item.recommendation.evidence_refs
+                                ],
+                                "model_context_refs": list(item.recommendation.model_context_refs),
+                                "policy_refs": list(item.recommendation.policy_refs),
                             },
                         )
                     )

@@ -126,6 +126,12 @@ Derived `Observation`:
 | `requires_resources` | string array | Extra resources needed |
 | `risk_level` | `low`, `medium`, or `high` | Risk classification |
 | `fairness_score` | number | Policy score from 0 to 1 |
+| `target_ids` | object | Canonical soldier, platoon, mission, patrol, and task IDs used by the output |
+| `evidence_refs` | object array | Machine-readable locators for observations, doctrine, and context used by the output |
+| `model_context_refs` | string array | Run/context locators passed into the recommendation step |
+| `policy_refs` | string array | Policy/audit locators used by the decision path |
+| `created_by` | string | Producing service, currently `system-1` |
+| `created_at_utc` | datetime | Recommendation creation timestamp |
 
 `RecommendationRecord` wraps a recommendation with:
 
@@ -140,7 +146,23 @@ Derived `Observation`:
 {
   "recommendation_id": "rec-123",
   "status": "approved",
-  "target_soldier_id": "Jones"
+  "target_soldier_id": "Jones",
+  "target_ids": {
+    "soldier_id": "Jones",
+    "platoon_id": "plt-1",
+    "mission_id": "mission-1",
+    "task_code": "MV-2"
+  },
+  "evidence_refs": [
+    {
+      "ref": "falkor://ranger/Observation/obs-123#note",
+      "role": "primary_observation"
+    }
+  ],
+  "model_context_refs": [
+    "postgres://ranger_runs/run-123#record.observations"
+  ],
+  "policy_refs": []
 }
 ```
 
@@ -175,7 +197,7 @@ inside the cluster.
 | Recommendation drafting and policy | Postgres `ranger_runs.record` | `recommendations[]`, run `status` | Stores draft `ScenarioRecommendation` records with policy decisions; allowed items become `pending`, blocked items become `blocked`, and the run moves to `pending_approval` |
 | Processing completes or fails | Postgres `ranger_audit_events` | `run_status_updated` or `run_failed` | Appends immutable lifecycle events with final processing status or error text |
 | `POST /v1/recommendations/{id}/decision` approve/reject | Postgres `ranger_runs.record` | Matching recommendation status | Updates the materialized run JSON to `approved` or `rejected`; blocked recommendations cannot be approved |
-| Approved recommendation emit | FalkorDB graph `ranger` | `Recommendation` node | Uses `MERGE`, sets target soldier, rationale, risk level, and fairness score, then links `Recommendation -> Soldier` with `TARGETS` |
+| Approved recommendation emit | FalkorDB graph `ranger` | `Recommendation` node and provenance edges | Uses `MERGE`, sets target soldier, rationale, risk level, and fairness score, then links `Recommendation -> Soldier` with `TARGETS`, `Recommendation -> Observation` with `DERIVED_FROM`, and `Recommendation -> Task` with `CITES` when provenance is present |
 | Recommendation decision | Postgres `ranger_audit_events` | `recommendation_decision_recorded` | Appends an immutable approval/rejection audit event with actor and recommendation ID |
 | Recommendation decision | Postgres `ranger_outbox_events` | `recommendation.approved` or `recommendation.rejected` | Appends a pending integration event containing recommendation ID, decision status, and target soldier ID |
 | `POST /v1/outbox/{event_id}/published` | Postgres `ranger_outbox_events` | Outbox event `status` | Mutates only `status`, from `pending` to `published`, after a consumer confirms it applied the event |
@@ -318,10 +340,11 @@ Current System 1 graph writes:
 
 - `write_observations` implements `Mission`, `Platoon`, `Soldier`, `Task`, and
   `Observation` node merges plus the observation relationships shown above.
-- `write_recommendation` currently implements `Recommendation` merge and
-  `Recommendation-[:TARGETS]->Soldier` only. `DERIVED_FROM` and `CITES` are
-  target-contract relationships and should be added when recommendation
-  `evidence_refs` are implemented.
+- `write_recommendation` implements `Recommendation` merge,
+  `Recommendation-[:TARGETS]->Soldier`,
+  `Recommendation-[:DERIVED_FROM]->Observation`, and
+  `Recommendation-[:CITES]->Task` when recommendation provenance contains
+  observation refs and task IDs.
 
 ### Postgres
 
@@ -490,9 +513,6 @@ Every app should have tests or evals proving:
 
 ## System 1 Current Gaps To Implement
 
-- Add `evidence_refs` and `target_ids` fields to System 1 output contracts.
-- Use those evidence refs to write `Recommendation-[:DERIVED_FROM]->Observation`
-  and `Recommendation-[:CITES]->Task` graph edges.
 - Add a Postgres update ledger table and drift detection helper.
 - Add pgvector ingestion for doctrine, observations, lessons, and trajectory
   summaries.

@@ -98,3 +98,51 @@ class KGClient:
             """,
             recommendation.model_dump(mode="json"),
         )
+        for observation_id in _observation_ids(recommendation):
+            graph.query(
+                """
+                MERGE (r:Recommendation {recommendation_id:$recommendation_id})
+                MERGE (o:Observation {observation_id:$observation_id})
+                MERGE (r)-[:DERIVED_FROM]->(o)
+                """,
+                {
+                    "recommendation_id": recommendation.recommendation_id,
+                    "observation_id": observation_id,
+                },
+            )
+        for task_code in _task_codes(recommendation):
+            graph.query(
+                """
+                MERGE (r:Recommendation {recommendation_id:$recommendation_id})
+                MERGE (t:Task {task_code:$task_code})
+                MERGE (r)-[:CITES]->(t)
+                """,
+                {
+                    "recommendation_id": recommendation.recommendation_id,
+                    "task_code": task_code,
+                },
+            )
+
+
+def _observation_ids(recommendation: ScenarioRecommendation) -> list[str]:
+    ids: list[str] = []
+    for evidence_ref in recommendation.evidence_refs:
+        observation_id = _entity_id_from_locator(evidence_ref.ref, "Observation")
+        if observation_id and observation_id not in ids:
+            ids.append(observation_id)
+    return ids
+
+
+def _task_codes(recommendation: ScenarioRecommendation) -> list[str]:
+    task_code = recommendation.target_ids.task_code
+    if not task_code or task_code == "UNMAPPED":
+        return []
+    return [task_code]
+
+
+def _entity_id_from_locator(locator: str, entity_type: str) -> str | None:
+    marker = f"/{entity_type}/"
+    if marker not in locator:
+        return None
+    value = locator.split(marker, maxsplit=1)[1].split("#", maxsplit=1)[0]
+    return value or None

@@ -97,6 +97,19 @@ class ORBookletPage(StrictModel):
     confidence: float = Field(default=0.0, ge=0, le=1)
 
 
+class TargetIds(StrictModel):
+    soldier_id: str | None = None
+    platoon_id: str | None = None
+    patrol_id: str | None = None
+    mission_id: str | None = None
+    task_code: str | None = None
+
+
+class EvidenceRef(StrictModel):
+    ref: str = Field(min_length=1)
+    role: str = Field(min_length=1)
+
+
 class ScenarioRecommendation(StrictModel):
     recommendation_id: str = Field(default_factory=lambda: str(uuid4()))
     target_soldier_id: str
@@ -109,6 +122,19 @@ class ScenarioRecommendation(StrictModel):
     requires_resources: list[str] = Field(default_factory=list)
     risk_level: RiskLevel
     fairness_score: float = Field(ge=0, le=1)
+    target_ids: TargetIds = Field(default_factory=TargetIds)
+    evidence_refs: list[EvidenceRef] = Field(default_factory=list)
+    model_context_refs: list[str] = Field(default_factory=list)
+    policy_refs: list[str] = Field(default_factory=list)
+    created_by: str = "system-1"
+    created_at_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator("created_at_utc")
+    @classmethod
+    def require_created_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("created_at_utc must include timezone information")
+        return value.astimezone(timezone.utc)
 
 
 class PolicyDecision(StrictModel):

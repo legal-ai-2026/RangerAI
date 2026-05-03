@@ -10,6 +10,8 @@ from src.ingest.providers import heuristic_observations, heuristic_recommendatio
 
 
 class FakeKG:
+    graph_name = "ranger"
+
     def health(self) -> bool:
         return True
 
@@ -74,6 +76,13 @@ def test_ingest_to_approval_workflow() -> None:
     assert completed.status == "pending_approval"
     assert len(completed.observations) == 3
     assert len(completed.recommendations) == 3
+    first_recommendation = completed.recommendations[0].recommendation
+    assert first_recommendation.target_ids.mission_id == "m-1"
+    assert first_recommendation.target_ids.platoon_id == "plt-1"
+    assert first_recommendation.evidence_refs
+    assert first_recommendation.model_context_refs == [
+        f"postgres://ranger_runs/{record.run_id}#record.observations"
+    ]
 
     pending = next(item for item in completed.recommendations if item.status == "pending")
     approval = workflow.approve(
@@ -89,9 +98,12 @@ def test_ingest_to_approval_workflow() -> None:
         "run_status_updated",
         "recommendation_decision_recorded",
     }.issubset(audit_event_types)
-    assert [event.event_type for event in store.list_outbox_events(record.run_id)] == [
-        "recommendation.approved"
-    ]
+    outbox_events = store.list_outbox_events(record.run_id)
+    assert [event.event_type for event in outbox_events] == ["recommendation.approved"]
+    assert outbox_events[0].payload["target_ids"] == pending.recommendation.target_ids.model_dump(
+        mode="json", exclude_none=True
+    )
+    assert outbox_events[0].payload["evidence_refs"]
 
 
 def test_dashboard_summary_includes_soldier_metrics_and_recommendations() -> None:

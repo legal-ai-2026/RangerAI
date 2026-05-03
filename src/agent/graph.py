@@ -7,6 +7,7 @@ from typing_extensions import NotRequired
 
 from src.agent.policy import PolicyEngine, observations_to_roster
 from src.contracts import (
+    EvidenceRef,
     IngestEnvelope,
     ORBookletPage,
     Observation,
@@ -14,6 +15,7 @@ from src.contracts import (
     RecommendationRecord,
     RunStatus,
     ScenarioRecommendation,
+    TargetIds,
 )
 from src.ingest.providers import ProviderClients
 from src.kg.client import KGClient
@@ -63,6 +65,8 @@ class ApprovalResume(TypedDict):
 class PendingRecommendationCard(TypedDict):
     recommendation_id: str
     target_soldier_id: str
+    target_ids: dict[str, Any]
+    evidence_refs: list[dict[str, Any]]
     rationale: str
     proposed_modification: str
     doctrine_refs: list[str]
@@ -166,6 +170,13 @@ class RangerGraphNodes:
 
     async def reason_node(self, state: RangerState) -> dict[str, Any]:
         recommendations = await self.providers.draft_recommendations(state.get("observations", []))
+        recommendations = _bind_recommendation_provenance(
+            recommendations=recommendations,
+            ingest=state["ingest"],
+            observations=state.get("observations", []),
+            run_id=state["run_id"],
+            graph_name=self.kg.graph_name,
+        )
         return {"recommendations": _recommendation_records(recommendations)}
 
     async def policy_node(self, state: RangerState) -> dict[str, Any]:
@@ -308,6 +319,66 @@ def _recommendation_records(
     ]
 
 
+def _bind_recommendation_provenance(
+    recommendations: list[ScenarioRecommendation],
+    ingest: IngestEnvelope,
+    observations: list[Observation],
+    run_id: str,
+    graph_name: str,
+) -> list[ScenarioRecommendation]:
+    observations_by_soldier: dict[str, list[Observation]] = {}
+    for observation in observations:
+        observations_by_soldier.setdefault(observation.soldier_id, []).append(observation)
+
+    bound: list[ScenarioRecommendation] = []
+    for recommendation in recommendations:
+        matched = observations_by_soldier.get(recommendation.target_soldier_id, [])
+        primary = matched[0] if matched else None
+        target_ids = TargetIds(
+            soldier_id=recommendation.target_ids.soldier_id or recommendation.target_soldier_id,
+            platoon_id=recommendation.target_ids.platoon_id or ingest.platoon_id,
+            patrol_id=recommendation.target_ids.patrol_id,
+            mission_id=recommendation.target_ids.mission_id or ingest.mission_id,
+            task_code=recommendation.target_ids.task_code
+            or (primary.task_code if primary else None),
+        )
+        evidence_refs = list(recommendation.evidence_refs)
+        evidence_refs.extend(
+            EvidenceRef(
+                ref=(f"falkor://{graph_name}/Observation/" f"{observation.observation_id}#note"),
+                role="primary_observation",
+            )
+            for observation in matched
+        )
+        evidence_refs.extend(
+            EvidenceRef(ref=_doctrine_locator(ref), role="doctrine")
+            for ref in recommendation.doctrine_refs
+        )
+        if not evidence_refs:
+            evidence_refs.append(
+                EvidenceRef(
+                    ref=f"postgres://ranger_runs/{run_id}#record.observations",
+                    role="model_context",
+                )
+            )
+
+        bound.append(
+            recommendation.model_copy(
+                update={
+                    "target_ids": target_ids,
+                    "evidence_refs": evidence_refs,
+                    "model_context_refs": [f"postgres://ranger_runs/{run_id}#record.observations"],
+                }
+            )
+        )
+    return bound
+
+
+def _doctrine_locator(doctrine_ref: str) -> str:
+    slug = doctrine_ref.strip().replace(" ", "-").replace("/", "-").replace("#", "")
+    return f"pgvector://doctrine/{slug}"
+
+
 def _pending_payload(state: RangerState | dict[str, Any]) -> dict[str, Any]:
     cards: list[PendingRecommendationCard] = []
     for item in state.get("recommendations", []):
@@ -318,6 +389,10 @@ def _pending_payload(state: RangerState | dict[str, Any]) -> dict[str, Any]:
             {
                 "recommendation_id": recommendation.recommendation_id,
                 "target_soldier_id": recommendation.target_soldier_id,
+                "target_ids": recommendation.target_ids.model_dump(mode="json", exclude_none=True),
+                "evidence_refs": [
+                    ref.model_dump(mode="json") for ref in recommendation.evidence_refs
+                ],
                 "rationale": recommendation.rationale,
                 "proposed_modification": recommendation.proposed_modification,
                 "doctrine_refs": list(recommendation.doctrine_refs),
