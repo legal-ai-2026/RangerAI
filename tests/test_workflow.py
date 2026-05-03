@@ -1,5 +1,6 @@
 import asyncio
 
+from src.agent.cache import InMemoryRunLease
 from src.agent.store import InMemoryRunStore
 from src.agent.workflow import RangerWorkflow
 from src.api import main
@@ -136,3 +137,28 @@ def test_api_exposes_only_versioned_operational_routes() -> None:
     assert "/ingest" not in paths
     assert "/runs/{run_id}" not in paths
     assert "/healthz" not in paths
+
+
+def test_process_records_error_when_run_lease_is_held() -> None:
+    store = InMemoryRunStore()
+    leases = InMemoryRunLease()
+    workflow = RangerWorkflow(store=store, providers=FakeProviders(), kg=FakeKG(), lease=leases)
+    record = workflow.create_run(
+        IngestEnvelope(
+            instructor_id="ri-1",
+            platoon_id="plt-1",
+            mission_id="m-1",
+            phase=Phase.mountain,
+            geo=GeoPoint(lat=35.0, lon=-83.0, grid_mgrs="17S"),
+            free_text="Jones blew Phase Line Bird.",
+        )
+    )
+    held = leases.acquire(record.run_id)
+    try:
+        asyncio.run(workflow.process(record.run_id))
+    finally:
+        held.release()
+
+    updated = store.get(record.run_id)
+    assert updated is not None
+    assert updated.errors == ["run is already being processed"]

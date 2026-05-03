@@ -56,7 +56,8 @@ FALKORDB_PASSWORD=
 
 Current code uses Postgres for run storage when the Postgres environment values
 are configured; otherwise it falls back to an in-memory store for local
-development. Redis-backed LangGraph checkpointing and pgvector retrieval are
+development. Redis is used for run-level workflow leases when `REDIS_URL` is
+configured. Redis-backed LangGraph checkpointing and pgvector retrieval are
 still pending.
 
 For local infrastructure only, use `docker/compose.dev.yaml`. The main app is

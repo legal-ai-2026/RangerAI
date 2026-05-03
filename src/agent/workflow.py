@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
+from src.agent.cache import RunLease, build_run_lease
 from src.agent.graph import (
     RangerState,
     build_ranger_graph,
@@ -26,10 +27,12 @@ class RangerWorkflow:
         store: RunStore,
         providers: ProviderClients | None = None,
         kg: KGClient | None = None,
+        lease: RunLease | None = None,
     ) -> None:
         self.store = store
         self.providers = providers or ProviderClients()
         self.kg = kg or KGClient()
+        self.lease = lease or build_run_lease()
         self.graph = build_ranger_graph(providers=self.providers, kg=self.kg)
 
     def create_run(self, ingest: IngestEnvelope) -> RunRecord:
@@ -38,10 +41,16 @@ class RangerWorkflow:
         return record
 
     async def process(self, run_id: str) -> None:
+        lease = self.lease.acquire(run_id)
+        if not lease.acquired:
+            record = self._require_run(run_id)
+            record.errors.append("run is already being processed")
+            self.store.put(record)
+            return
         record = self._require_run(run_id)
-        record.status = RunStatus.processing
-        self.store.put(record)
         try:
+            record.status = RunStatus.processing
+            self.store.put(record)
             state: RangerState = {
                 "run_id": run_id,
                 "ingest": record.ingest,
@@ -63,36 +72,44 @@ class RangerWorkflow:
             record.status = RunStatus.failed
             record.errors.append(str(exc))
             self.store.put(record)
+        finally:
+            lease.release()
 
     def approve(self, run_id: str, recommendation_id: str, approved: bool) -> ApprovalResponse:
-        record = self._require_run(run_id)
-        for item in record.recommendations:
-            if item.recommendation.recommendation_id == recommendation_id:
-                if item.status == "blocked" and approved:
-                    raise ValueError("blocked recommendations cannot be approved")
-                break
-        else:
-            raise KeyError(f"recommendation {recommendation_id} not found")
+        lease = self.lease.acquire(run_id)
+        if not lease.acquired:
+            raise ValueError("run is already being processed")
+        try:
+            record = self._require_run(run_id)
+            for item in record.recommendations:
+                if item.recommendation.recommendation_id == recommendation_id:
+                    if item.status == "blocked" and approved:
+                        raise ValueError("blocked recommendations cannot be approved")
+                    break
+            else:
+                raise KeyError(f"recommendation {recommendation_id} not found")
 
-        command = make_resume_command(
-            {
-                "recommendation_id": recommendation_id,
-                "decision": "approve" if approved else "reject",
-            }
-        )
-        output = self._invoke_resume(run_id, command)
-        updated = self._put_state(
-            run_id,
-            extract_state(output, graph=self.graph, config=self._graph_config(run_id)),
-        )
-        for item in updated.recommendations:
-            if item.recommendation.recommendation_id == recommendation_id:
-                return ApprovalResponse(
-                    run_id=run_id,
-                    recommendation_id=recommendation_id,
-                    status=item.status,
-                )
-        raise KeyError(f"recommendation {recommendation_id} not found")
+            command = make_resume_command(
+                {
+                    "recommendation_id": recommendation_id,
+                    "decision": "approve" if approved else "reject",
+                }
+            )
+            output = self._invoke_resume(run_id, command)
+            updated = self._put_state(
+                run_id,
+                extract_state(output, graph=self.graph, config=self._graph_config(run_id)),
+            )
+            for item in updated.recommendations:
+                if item.recommendation.recommendation_id == recommendation_id:
+                    return ApprovalResponse(
+                        run_id=run_id,
+                        recommendation_id=recommendation_id,
+                        status=item.status,
+                    )
+            raise KeyError(f"recommendation {recommendation_id} not found")
+        finally:
+            lease.release()
 
     def _require_run(self, run_id: str) -> RunRecord:
         record = self.store.get(run_id)

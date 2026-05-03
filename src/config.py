@@ -29,7 +29,7 @@ class Settings:
     falkordb_graph: str = os.getenv("FALKORDB_GRAPH", "ranger")
     falkordb_username: str | None = field(default=os.getenv("FALKORDB_USERNAME"), repr=False)
     falkordb_password: str | None = field(default=os.getenv("FALKORDB_PASSWORD"), repr=False)
-    redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    redis_url: str | None = os.getenv("REDIS_URL")
     langfuse_public_key: str | None = field(default=os.getenv("LANGFUSE_PUBLIC_KEY"), repr=False)
     langfuse_secret_key: str | None = field(default=os.getenv("LANGFUSE_SECRET_KEY"), repr=False)
     langfuse_host: str | None = os.getenv("LANGFUSE_HOST")
