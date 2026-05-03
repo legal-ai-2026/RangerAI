@@ -8,6 +8,146 @@ The rule is simple: the frontend sends canonical IDs, services resolve details
 from shared stores, and every agentic output must cite the exact data records
 that caused it.
 
+## System 1 Project Profile
+
+This repository is the System 1 Ranger adversarial training agent. It is an
+API-only backend, not a frontend and not a long-running chatbot. It receives an
+instructor ingest envelope, extracts observations, writes graph facts, drafts
+recommendations, applies policy checks, waits for instructor approval, and emits
+decision events for the other systems.
+
+| Area | Detail |
+|---|---|
+| Service name | System 1 Ranger adversarial training agent |
+| Runtime posture | Main app runs outside Kubernetes; shared Postgres, Redis, pgvector, and FalkorDB may run inside Kubernetes |
+| Public API root | `/v1` |
+| Primary input | `IngestEnvelope` submitted to `POST /v1/ingest` |
+| Primary output | `RunRecord` with observations, recommendation records, audit events, dashboard summary, and outbox events |
+| Human gate | Recommendations must be approved or rejected through `/v1/recommendations/{recommendation_id}/decision` |
+| System 1-owned IDs | `run_id`, `observation_id`, `recommendation_id`, `event_id` for its own runs/events |
+| Externally owned IDs | `soldier_id`, `instructor_id`, `platoon_id`, `patrol_id`, `mission_id`, `task_code` |
+| Source of truth this service writes | Run state, audit events, outbox events, observations, and approved recommendation graph nodes |
+| Source of truth this service does not own | Roster/person profiles, mission plans, training trajectory profiles, lessons-learned records |
+
+Other projects should treat this service as the owner of short-horizon
+scenario observations and instructor-approved scenario recommendations. They
+should not write into `ranger_runs`, `ranger_audit_events`, or
+`ranger_outbox_events` directly.
+
+## System 1 API For Other Projects
+
+| Method | Path | Caller | Purpose | Important response data |
+|---|---|---|---|---|
+| `GET` | `/v1/healthz` | Frontend, operators, other services | Check app, provider, and infra availability | `dependencies_available`, `providers_configured`, configured OpenAI model names |
+| `POST` | `/v1/ingest` | Frontend or instructor workflow | Start a new processing run | `run_id`, initial `status=accepted`, original `ingest` |
+| `GET` | `/v1/runs/{run_id}` | Frontend, System 2, System 3 | Fetch canonical System 1 run state | `observations`, `recommendations`, `kg_write_summary`, `errors` |
+| `GET` | `/v1/dashboard/runs/{run_id}` | Frontend | Fetch presentation-neutral summary | per-soldier GO/NOGO counts, readiness score, active recommendations |
+| `GET` | `/v1/runs/{run_id}/audit` | Frontend, System 2, System 3 | Inspect lifecycle and decision events | immutable `AuditEvent[]` ordered by timestamp |
+| `POST` | `/v1/recommendations/{recommendation_id}/decision` | Frontend/instructor workflow | Approve or reject a recommendation | `ApprovalResponse` with final status |
+| `GET` | `/v1/outbox` | System 2, System 3, integration workers | Poll pending System 1 decision events | `OutboxEvent[]` |
+| `POST` | `/v1/outbox/{event_id}/published` | System 2, System 3, integration workers | Mark a consumed event as published | `event_id`, `status=published` |
+
+The frontend may call the decision endpoint by `recommendation_id` only. This
+service resolves the owning `run_id` from its run store.
+
+Future endpoints named in architecture but not implemented yet:
+
+- `GET /v1/soldier/{id}/training-trajectory`
+- `POST /v1/lessons-learned`
+
+Until those endpoints exist, System 2 and System 3 should exchange trajectory
+and lesson data through the shared stores and outbox/update-ledger pattern in
+this document.
+
+## System 1 State Machine
+
+Run statuses:
+
+| Status | Meaning | Who should act |
+|---|---|---|
+| `accepted` | Ingest was validated and persisted | System 1 background processor |
+| `processing` | STT/OCR/extraction/KG/reasoning/policy are running | System 1 |
+| `pending_approval` | Recommendations are ready for instructor decision | Frontend/instructor |
+| `completed` | All recommendations are approved, rejected, or blocked | System 2/System 3 may consume outbox events |
+| `failed` | Processing failed; inspect `errors` and audit events | Operator or caller |
+
+Recommendation statuses:
+
+| Status | Meaning | Downstream rule |
+|---|---|---|
+| `pending` | Policy allowed the recommendation; instructor has not decided | Do not treat as approved training intent |
+| `approved` | Instructor approved it | Systems 2 and 3 may use it as a decision signal |
+| `rejected` | Instructor rejected it | Systems 2 and 3 may use it as negative feedback |
+| `blocked` | Policy rejected it before instructor approval | Do not approve or execute; use reasons for safety/fairness analysis |
+
+## System 1 Contract Shapes
+
+Inbound `IngestEnvelope`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `envelope_id` | string | Caller-supplied or generated envelope identifier |
+| `instructor_id` | string | Canonical instructor/operator ID |
+| `platoon_id` | string | Canonical platoon ID |
+| `mission_id` | string | Canonical mission/scenario ID |
+| `phase` | `Benning`, `Mountain`, or `Florida` | Ranger School phase |
+| `timestamp_utc` | timezone-aware datetime | Observation time |
+| `geo` | object | `lat`, `lon`, and `grid_mgrs` |
+| `audio_b64` | string or null | Optional instructor audio |
+| `image_b64` | string array | Optional OR booklet/page photos |
+| `free_text` | string or null | Optional typed instructor note, max 20,000 chars |
+
+At least one of `audio_b64`, `image_b64`, or `free_text` is required.
+
+Derived `Observation`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `observation_id` | string | System 1 atomic fact ID |
+| `soldier_id` | string | Canonical target soldier ID |
+| `task_code` | string | Doctrine/OR task code; `UNMAPPED` when unclear |
+| `note` | string | Redacted observation text |
+| `rating` | `GO`, `NOGO`, or `UNCERTAIN` | Instructor/model-derived task assessment |
+| `timestamp_utc` | datetime | Observation timestamp |
+| `source` | `audio`, `image`, `free_text`, or `synthetic` | Source branch |
+
+`ScenarioRecommendation`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `recommendation_id` | string | System 1 recommendation ID |
+| `target_soldier_id` | string | Canonical soldier ID |
+| `rationale` | string | Why the scenario modification is proposed |
+| `development_edge` | enum | Development area such as `communications` or `fire_control` |
+| `proposed_modification` | string | Instructor-approved training inject proposal |
+| `doctrine_refs` | string array | Human-readable doctrine references |
+| `safety_checks` | string array | Safety constraints and checks |
+| `estimated_duration_min` | integer | Estimated duration, 5 to 240 minutes |
+| `requires_resources` | string array | Extra resources needed |
+| `risk_level` | `low`, `medium`, or `high` | Risk classification |
+| `fairness_score` | number | Policy score from 0 to 1 |
+
+`RecommendationRecord` wraps a recommendation with:
+
+- `policy.allowed`
+- `policy.reasons`
+- `policy.fairness_score`
+- `status`
+
+`OutboxEvent.payload` currently contains:
+
+```json
+{
+  "recommendation_id": "rec-123",
+  "status": "approved",
+  "target_soldier_id": "Jones"
+}
+```
+
+Systems 2 and 3 should resolve the full run, observation, recommendation, and
+audit context by reading `GET /v1/runs/{run_id}` and
+`GET /v1/runs/{run_id}/audit` after receiving an outbox event.
+
 ## Shared Infrastructure
 
 | Store | Shared role | Write rule |
