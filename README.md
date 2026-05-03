@@ -44,6 +44,7 @@ POSTGRES_DB=
 POSTGRES_USER=
 POSTGRES_PASSWORD=
 POSTGRES_SSLMODE=require
+EMBEDDING_DIMENSIONS=1536
 
 REDIS_URL=redis://:password@host:6379/0
 
@@ -57,8 +58,9 @@ FALKORDB_PASSWORD=
 Current code uses Postgres for run storage when the Postgres environment values
 are configured; otherwise it falls back to an in-memory store for local
 development. Redis is used for run-level workflow leases when `REDIS_URL` is
-configured. Redis-backed LangGraph checkpointing and pgvector retrieval are
-still pending.
+configured. A pgvector document store adapter exists for future doctrine and
+observation retrieval. Redis-backed LangGraph checkpointing and embedding
+ingestion are still pending.
 
 For local infrastructure only, use `docker/compose.dev.yaml`. The main app is
 started separately with `uvicorn`.

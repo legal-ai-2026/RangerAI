@@ -5,6 +5,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from src.agent.cache import redis_health
 from src.agent.dashboard import build_dashboard_summary
 from src.agent.store import build_run_store
+from src.agent.vector_store import build_vector_store
 from src.agent.workflow import RangerWorkflow, compile_langgraph_probe
 from src.config import settings
 from src.contracts import (
@@ -17,6 +18,7 @@ from src.contracts import (
 )
 
 store = build_run_store()
+vector_store = build_vector_store()
 workflow = RangerWorkflow(store=store)
 
 app = FastAPI(
@@ -42,6 +44,7 @@ def healthz() -> dict[str, object]:
         "falkordb": falkordb_available,
         "dependencies_available": {
             "run_store": store.health(),
+            "pgvector": vector_store.health() if vector_store is not None else False,
             "redis": redis_health(settings.redis_url),
             "falkordb": falkordb_available,
         },
@@ -52,6 +55,7 @@ def healthz() -> dict[str, object]:
         },
         "infrastructure_configured": {
             "postgres": settings.postgres_configured,
+            "pgvector": settings.postgres_configured,
             "redis": bool(settings.redis_url),
             "falkordb": bool(settings.falkordb_host),
         },

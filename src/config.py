@@ -23,6 +23,7 @@ class Settings:
     postgres_user: str | None = field(default=os.getenv("POSTGRES_USER"), repr=False)
     postgres_password: str | None = field(default=os.getenv("POSTGRES_PASSWORD"), repr=False)
     postgres_sslmode: str = os.getenv("POSTGRES_SSLMODE", "require")
+    embedding_dimensions: int = int(os.getenv("EMBEDDING_DIMENSIONS", "1536"))
 
     falkordb_host: str = os.getenv("FALKORDB_HOST", "localhost")
     falkordb_port: int = int(os.getenv("FALKORDB_PORT", "6379"))
