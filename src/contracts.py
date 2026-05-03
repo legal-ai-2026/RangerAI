@@ -42,6 +42,17 @@ class RunStatus(str, Enum):
     failed = "failed"
 
 
+UpdateOperation = Literal[
+    "create",
+    "observe",
+    "approve",
+    "reject",
+    "correct",
+    "supersede",
+    "drift_detected",
+]
+
+
 class GeoPoint(StrictModel):
     lat: float = Field(ge=-90, le=90)
     lon: float = Field(ge=-180, le=180)
@@ -236,3 +247,24 @@ class OutboxEvent(StrictModel):
 class OutboxPublishResponse(StrictModel):
     event_id: str
     status: Literal["published"]
+
+
+class UpdateLedgerEntry(StrictModel):
+    version_id: str = Field(default_factory=lambda: str(uuid4()))
+    entity_type: str = Field(min_length=1)
+    entity_id: str = Field(min_length=1)
+    source_service: str = "system-1"
+    operation: UpdateOperation
+    base_version_id: str | None = None
+    patch: dict[str, object] = Field(default_factory=dict)
+    source_refs: list[str] = Field(default_factory=list)
+    content_hash_before: str | None = None
+    content_hash_after: str = Field(min_length=1)
+    created_at_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator("created_at_utc")
+    @classmethod
+    def require_update_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("created_at_utc must include timezone information")
+        return value.astimezone(timezone.utc)

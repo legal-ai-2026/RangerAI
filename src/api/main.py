@@ -17,6 +17,7 @@ from src.contracts import (
     OutboxPublishResponse,
     RecommendationDecision,
     RunRecord,
+    UpdateLedgerEntry,
 )
 
 store = build_run_store()
@@ -95,6 +96,17 @@ def list_pending_outbox_events(limit: int = 100) -> list[OutboxEvent]:
     if limit < 1 or limit > 500:
         raise HTTPException(status_code=422, detail="limit must be between 1 and 500")
     return store.list_pending_outbox_events(limit=limit)
+
+
+@app.get("/v1/update-ledger", response_model=list[UpdateLedgerEntry])
+def list_update_ledger(
+    entity_type: str | None = None,
+    entity_id: str | None = None,
+    limit: int = 100,
+) -> list[UpdateLedgerEntry]:
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 500")
+    return store.list_update_events(entity_type=entity_type, entity_id=entity_id, limit=limit)
 
 
 @app.post("/v1/outbox/{event_id}/published", response_model=OutboxPublishResponse)

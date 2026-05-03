@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from src.config import Settings, settings
-from src.contracts import AuditEvent, OutboxEvent, RunRecord
+from src.contracts import AuditEvent, OutboxEvent, RunRecord, UpdateLedgerEntry
 
 
 class RunStore(Protocol):
@@ -28,12 +28,22 @@ class RunStore(Protocol):
 
     def mark_outbox_event_published(self, event_id: str) -> bool: ...
 
+    def append_update_event(self, event: UpdateLedgerEntry) -> None: ...
+
+    def list_update_events(
+        self,
+        entity_type: str | None = None,
+        entity_id: str | None = None,
+        limit: int = 100,
+    ) -> list[UpdateLedgerEntry]: ...
+
 
 @dataclass
 class InMemoryRunStore:
     records: dict[str, RunRecord] = field(default_factory=dict)
     audit_events: dict[str, list[AuditEvent]] = field(default_factory=dict)
     outbox_events: dict[str, list[OutboxEvent]] = field(default_factory=dict)
+    update_events: list[UpdateLedgerEntry] = field(default_factory=list)
 
     def put(self, record: RunRecord) -> None:
         self.records[record.run_id] = record
@@ -86,6 +96,23 @@ class InMemoryRunStore:
                 self.outbox_events[run_id][index] = event.model_copy(update={"status": "published"})
                 return True
         return False
+
+    def append_update_event(self, event: UpdateLedgerEntry) -> None:
+        if not any(item.version_id == event.version_id for item in self.update_events):
+            self.update_events.append(event)
+
+    def list_update_events(
+        self,
+        entity_type: str | None = None,
+        entity_id: str | None = None,
+        limit: int = 100,
+    ) -> list[UpdateLedgerEntry]:
+        events = self.update_events
+        if entity_type is not None:
+            events = [event for event in events if event.entity_type == entity_type]
+        if entity_id is not None:
+            events = [event for event in events if event.entity_id == entity_id]
+        return sorted(events, key=lambda event: event.created_at_utc)[:limit]
 
 
 @dataclass
@@ -327,6 +354,87 @@ class PostgresRunStore:
             )
         return result.rowcount > 0
 
+    def append_update_event(self, event: UpdateLedgerEntry) -> None:
+        from psycopg.types.json import Jsonb
+
+        with self._connect() as conn:
+            self._ensure_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO ranger_update_ledger (
+                    version_id,
+                    entity_type,
+                    entity_id,
+                    source_service,
+                    operation,
+                    base_version_id,
+                    patch,
+                    source_refs,
+                    content_hash_before,
+                    content_hash_after,
+                    created_at_utc
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (version_id) DO NOTHING
+                """,
+                (
+                    event.version_id,
+                    event.entity_type,
+                    event.entity_id,
+                    event.source_service,
+                    event.operation,
+                    event.base_version_id,
+                    Jsonb(event.patch),
+                    Jsonb(event.source_refs),
+                    event.content_hash_before,
+                    event.content_hash_after,
+                    event.created_at_utc,
+                ),
+            )
+
+    def list_update_events(
+        self,
+        entity_type: str | None = None,
+        entity_id: str | None = None,
+        limit: int = 100,
+    ) -> list[UpdateLedgerEntry]:
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+        filters: list[str] = []
+        params: list[object] = []
+        if entity_type is not None:
+            filters.append("entity_type = %s")
+            params.append(entity_type)
+        if entity_id is not None:
+            filters.append("entity_id = %s")
+            params.append(entity_id)
+        where_clause = "WHERE " + " AND ".join(filters) if filters else ""
+        params.append(limit)
+        with self._connect() as conn:
+            self._ensure_schema(conn)
+            rows = conn.execute(
+                f"""
+                SELECT
+                    version_id,
+                    entity_type,
+                    entity_id,
+                    source_service,
+                    operation,
+                    base_version_id,
+                    patch,
+                    source_refs,
+                    content_hash_before,
+                    content_hash_after,
+                    created_at_utc
+                FROM ranger_update_ledger
+                {where_clause}
+                ORDER BY created_at_utc ASC
+                LIMIT %s
+                """,
+                params,
+            ).fetchall()
+        return [_update_event_from_row(row) for row in rows]
+
     def _connect(self) -> Any:
         import psycopg
 
@@ -401,6 +509,29 @@ class PostgresRunStore:
             ON ranger_outbox_events (status, timestamp_utc)
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ranger_update_ledger (
+                version_id text PRIMARY KEY,
+                entity_type text NOT NULL,
+                entity_id text NOT NULL,
+                source_service text NOT NULL,
+                operation text NOT NULL,
+                base_version_id text,
+                patch jsonb NOT NULL,
+                source_refs jsonb NOT NULL,
+                content_hash_before text,
+                content_hash_after text NOT NULL,
+                created_at_utc timestamptz NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS ranger_update_ledger_entity_idx
+            ON ranger_update_ledger (entity_type, entity_id, created_at_utc)
+            """
+        )
         self._schema_ready = True
 
 
@@ -425,4 +556,20 @@ def _outbox_event_from_row(row: Any) -> OutboxEvent:
         payload=row[4],
         status=row[5],
         timestamp_utc=row[6],
+    )
+
+
+def _update_event_from_row(row: Any) -> UpdateLedgerEntry:
+    return UpdateLedgerEntry(
+        version_id=row[0],
+        entity_type=row[1],
+        entity_id=row[2],
+        source_service=row[3],
+        operation=row[4],
+        base_version_id=row[5],
+        patch=row[6],
+        source_refs=row[7],
+        content_hash_before=row[8],
+        content_hash_after=row[9],
+        created_at_utc=row[10],
     )

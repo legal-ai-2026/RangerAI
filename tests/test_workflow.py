@@ -104,6 +104,14 @@ def test_ingest_to_approval_workflow() -> None:
         mode="json", exclude_none=True
     )
     assert outbox_events[0].payload["evidence_refs"]
+    update_events = store.list_update_events()
+    assert len([event for event in update_events if event.entity_type == "observation"]) == 3
+    recommendation_updates = [
+        event for event in update_events if event.entity_type == "recommendation"
+    ]
+    assert len(recommendation_updates) == 1
+    assert recommendation_updates[0].operation == "approve"
+    assert recommendation_updates[0].source_refs
 
 
 def test_dashboard_summary_includes_soldier_metrics_and_recommendations() -> None:
@@ -177,6 +185,7 @@ def test_api_exposes_only_versioned_operational_routes() -> None:
     assert "/v1/recommendations/{recommendation_id}/decision" in paths
     assert "/v1/outbox" in paths
     assert "/v1/outbox/{event_id}/published" in paths
+    assert "/v1/update-ledger" in paths
     assert "/ingest" not in paths
     assert "/runs/{run_id}" not in paths
     assert "/healthz" not in paths

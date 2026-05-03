@@ -45,6 +45,7 @@ should not write into `ranger_runs`, `ranger_audit_events`, or
 | `GET` | `/v1/runs/{run_id}/audit` | Frontend, System 2, System 3 | Inspect lifecycle and decision events | immutable `AuditEvent[]` ordered by timestamp |
 | `POST` | `/v1/recommendations/{recommendation_id}/decision` | Frontend/instructor workflow | Approve or reject a recommendation | `ApprovalResponse` with final status |
 | `GET` | `/v1/outbox` | System 2, System 3, integration workers | Poll pending System 1 decision events | `OutboxEvent[]` |
+| `GET` | `/v1/update-ledger` | System 2, System 3, integration workers | Poll append-only System 1 observation and recommendation updates | `UpdateLedgerEntry[]` filtered by optional `entity_type` and `entity_id` |
 | `POST` | `/v1/outbox/{event_id}/published` | System 2, System 3, integration workers | Mark a consumed event as published | `event_id`, `status=published` |
 
 The frontend may call the decision endpoint by `recommendation_id` only. This
@@ -170,6 +171,22 @@ Systems 2 and 3 should resolve the full run, observation, recommendation, and
 audit context by reading `GET /v1/runs/{run_id}` and
 `GET /v1/runs/{run_id}/audit` after receiving an outbox event.
 
+`UpdateLedgerEntry` records append-only System 1 updates:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `version_id` | string | Immutable update version ID |
+| `entity_type` | string | `observation` or `recommendation` for current System 1 writes |
+| `entity_id` | string | `observation_id` or `recommendation_id` |
+| `source_service` | string | Producing service, currently `system-1` |
+| `operation` | enum | `observe`, `approve`, `reject`, or future update operation |
+| `base_version_id` | string or null | Prior version when known |
+| `patch` | object | JSON patch/projection payload for the update |
+| `source_refs` | string array | Source locators used by the update |
+| `content_hash_before` | string or null | Hash before update when known |
+| `content_hash_after` | string | Hash of the normalized patch |
+| `created_at_utc` | datetime | Update timestamp |
+
 ## Shared Infrastructure
 
 | Store | Shared role | Write rule |
@@ -193,10 +210,12 @@ inside the cluster.
 | Background processing starts | Redis | `ranger:run-lease:{run_id}` | Creates a 900-second lease with `SET NX EX`; deletes it on release if the token still matches |
 | Background processing starts | Postgres `ranger_audit_events` | `run_processing_started` | Appends an immutable event before STT/OCR/extraction work begins |
 | STT/OCR/extraction completes | Postgres `ranger_runs.record` | `transcript`, `ocr_pages`, `observations` | Replaces the materialized run JSON with derived transcript text, OCR rows, and normalized observations; raw audio and image payloads are not separately persisted by this project |
+| New observation recorded | Postgres `ranger_update_ledger` | `observation` update | Appends an immutable `observe` event with observation patch, source refs, and content hash |
 | Observation graph write | FalkorDB graph `ranger` | `Mission`, `Platoon`, `Soldier`, `Task`, `Observation` nodes and relationships | Uses `MERGE` on canonical IDs, sets observation note/rating/timestamp, and links `Soldier -> Platoon -> Mission`, `Soldier -> Observation`, and `Observation -> Task` |
 | Recommendation drafting and policy | Postgres `ranger_runs.record` | `recommendations[]`, run `status` | Stores draft `ScenarioRecommendation` records with policy decisions; allowed items become `pending`, blocked items become `blocked`, and the run moves to `pending_approval` |
 | Processing completes or fails | Postgres `ranger_audit_events` | `run_status_updated` or `run_failed` | Appends immutable lifecycle events with final processing status or error text |
 | `POST /v1/recommendations/{id}/decision` approve/reject | Postgres `ranger_runs.record` | Matching recommendation status | Updates the materialized run JSON to `approved` or `rejected`; blocked recommendations cannot be approved |
+| Recommendation decision | Postgres `ranger_update_ledger` | `recommendation` update | Appends an immutable `approve` or `reject` event with target IDs, evidence refs, source refs, and content hash |
 | Approved recommendation emit | FalkorDB graph `ranger` | `Recommendation` node and provenance edges | Uses `MERGE`, sets target soldier, rationale, risk level, and fairness score, then links `Recommendation -> Soldier` with `TARGETS`, `Recommendation -> Observation` with `DERIVED_FROM`, and `Recommendation -> Task` with `CITES` when provenance is present |
 | Recommendation decision | Postgres `ranger_audit_events` | `recommendation_decision_recorded` | Appends an immutable approval/rejection audit event with actor and recommendation ID |
 | Recommendation decision | Postgres `ranger_outbox_events` | `recommendation.approved` or `recommendation.rejected` | Appends a pending integration event containing recommendation ID, decision status, and target soldier ID |
@@ -217,6 +236,7 @@ tables:
 | `ranger_runs` | `run_id` | Mutable materialized state | Current run status, ingest envelope, transcript, OCR rows, observations, KG write summary, recommendation records, and errors |
 | `ranger_audit_events` | `event_id` | Append-only | Run lifecycle and instructor decision events |
 | `ranger_outbox_events` | `event_id` | Append-only except `status` | Integration events for other systems to consume |
+| `ranger_update_ledger` | `version_id` | Append-only | Observation and recommendation update history with source refs and content hashes |
 | `ranger_vector_documents` | `(namespace, document_id)` | Upsert by namespace/document ID | Semantic documents and embeddings for pgvector retrieval |
 
 `ranger_runs.record` is the current materialized state. Other systems should
@@ -463,8 +483,9 @@ Current System 1 status:
   `ranger_audit_events`.
 - Cross-system decision notifications are stored separately in
   `ranger_outbox_events`.
-- A dedicated `ranger_update_ledger` table and content-hash drift helper are
-  not implemented yet.
+- Observation and recommendation updates are stored separately in
+  `ranger_update_ledger`.
+- Cross-record drift comparison jobs are not implemented yet.
 
 ## Drift Detection Responsibilities
 
@@ -484,6 +505,7 @@ System 1 currently exposes:
 
 ```text
 GET /v1/outbox
+GET /v1/update-ledger
 POST /v1/outbox/{event_id}/published
 ```
 
@@ -513,7 +535,7 @@ Every app should have tests or evals proving:
 
 ## System 1 Current Gaps To Implement
 
-- Add a Postgres update ledger table and drift detection helper.
+- Add a drift detection comparison helper over `ranger_update_ledger`.
 - Add pgvector ingestion for doctrine, observations, lessons, and trajectory
   summaries.
 - Add cross-system endpoints for soldier/mission detail lookup by canonical ID.

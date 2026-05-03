@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, Literal, cast
 from uuid import uuid4
 
@@ -15,9 +17,12 @@ from src.contracts import (
     ApprovalResponse,
     AuditEvent,
     IngestEnvelope,
+    Observation,
     OutboxEvent,
     RunRecord,
     RunStatus,
+    ScenarioRecommendation,
+    UpdateLedgerEntry,
 )
 from src.ingest.providers import ProviderClients
 from src.kg.client import KGClient
@@ -91,11 +96,13 @@ class RangerWorkflow:
                 "status": RunStatus.processing,
                 "errors": record.errors,
             }
+            existing_observation_ids = {item.observation_id for item in record.observations}
             output = await self.graph.ainvoke(state, config=self._graph_config(run_id))
             updated = self._put_state(
                 run_id,
                 extract_state(output, graph=self.graph, config=self._graph_config(run_id)),
             )
+            self._append_observation_updates(updated, existing_observation_ids)
             self.store.append_audit_event(
                 AuditEvent(
                     run_id=run_id,
@@ -152,6 +159,12 @@ class RangerWorkflow:
                             f"recommendation decision produced invalid status {item.status}"
                         )
                     decision_status = cast(Literal["approved", "rejected"], item.status)
+                    recommendation_update = _recommendation_update_event(
+                        run_id=run_id,
+                        recommendation=item.recommendation,
+                        status=decision_status,
+                    )
+                    self.store.append_update_event(recommendation_update)
                     self.store.append_audit_event(
                         AuditEvent(
                             run_id=run_id,
@@ -222,6 +235,22 @@ class RangerWorkflow:
     def _graph_config(self, run_id: str) -> dict[str, Any]:
         return {"configurable": {"thread_id": run_id}}
 
+    def _append_observation_updates(
+        self,
+        record: RunRecord,
+        existing_observation_ids: set[str],
+    ) -> None:
+        for observation in record.observations:
+            if observation.observation_id in existing_observation_ids:
+                continue
+            self.store.append_update_event(
+                _observation_update_event(
+                    run_id=record.run_id,
+                    observation=observation,
+                    graph_name=self.kg.graph_name,
+                )
+            )
+
 
 def compile_langgraph_probe() -> bool:
     """Return True when LangGraph is importable in the runtime image."""
@@ -230,3 +259,54 @@ def compile_langgraph_probe() -> bool:
     except Exception:
         return False
     return True
+
+
+def _observation_update_event(
+    run_id: str,
+    observation: Observation,
+    graph_name: str,
+) -> UpdateLedgerEntry:
+    patch = observation.model_dump(mode="json")
+    return UpdateLedgerEntry(
+        entity_type="observation",
+        entity_id=observation.observation_id,
+        operation="observe",
+        patch=patch,
+        source_refs=[
+            f"postgres://ranger_runs/{run_id}#record.observations",
+            f"falkor://{graph_name}/Observation/{observation.observation_id}",
+        ],
+        content_hash_after=_content_hash(patch),
+    )
+
+
+def _recommendation_update_event(
+    run_id: str,
+    recommendation: ScenarioRecommendation,
+    status: Literal["approved", "rejected"],
+) -> UpdateLedgerEntry:
+    patch: dict[str, object] = {
+        "recommendation_id": recommendation.recommendation_id,
+        "status": status,
+        "target_ids": recommendation.target_ids.model_dump(mode="json", exclude_none=True),
+        "evidence_refs": [ref.model_dump(mode="json") for ref in recommendation.evidence_refs],
+        "model_context_refs": list(recommendation.model_context_refs),
+        "policy_refs": list(recommendation.policy_refs),
+    }
+    operation: Literal["approve", "reject"] = "approve" if status == "approved" else "reject"
+    return UpdateLedgerEntry(
+        entity_type="recommendation",
+        entity_id=recommendation.recommendation_id,
+        operation=operation,
+        patch=patch,
+        source_refs=[
+            f"postgres://ranger_runs/{run_id}#record.recommendations",
+            *[ref.ref for ref in recommendation.evidence_refs],
+        ],
+        content_hash_after=_content_hash(patch),
+    )
+
+
+def _content_hash(payload: dict[str, object]) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()

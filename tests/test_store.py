@@ -13,6 +13,7 @@ from src.contracts import (
     RunRecord,
     RunStatus,
     ScenarioRecommendation,
+    UpdateLedgerEntry,
 )
 
 
@@ -85,13 +86,25 @@ def test_memory_store_tracks_audit_and_outbox_events() -> None:
         aggregate_id="rec-1",
         run_id="run-1",
     )
+    update = UpdateLedgerEntry(
+        entity_type="recommendation",
+        entity_id="rec-1",
+        operation="approve",
+        patch={"status": "approved"},
+        content_hash_after="sha256:test",
+    )
 
     store.append_audit_event(audit)
     store.append_outbox_event(outbox)
+    store.append_update_event(update)
 
     assert store.list_audit_events("run-1") == [audit]
     assert store.list_outbox_events("run-1") == [outbox]
     assert store.list_pending_outbox_events() == [outbox]
+    assert store.list_update_events() == [update]
+    assert store.list_update_events(entity_type="recommendation") == [update]
+    assert store.list_update_events(entity_id="rec-1") == [update]
+    assert store.list_update_events(entity_id="missing") == []
     assert store.mark_outbox_event_published(outbox.event_id)
     assert store.list_pending_outbox_events() == []
     assert not store.mark_outbox_event_published("missing")
