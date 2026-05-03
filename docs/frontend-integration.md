@@ -91,6 +91,133 @@ Current backend status:
 - Do not expose the API directly on a public network. Put it behind the
   frontend gateway, VPN, or another authenticated internal boundary.
 
+## Cluster Frontend Deployment
+
+When the frontend is deployed to Kubernetes, connect to System 1 through the
+internal Kubernetes Service instead of the MetalLB address:
+
+```text
+http://c2d2-avai.staging.svc.cluster.local
+```
+
+If the frontend runs in the same `staging` namespace, the short service name is
+also valid:
+
+```text
+http://c2d2-avai
+```
+
+The current staging Service exposes port `80` and forwards to the API container
+on port `8001`, so frontend server-side code should call `/v1` paths under the
+service URL:
+
+```text
+SYSTEM1_INTERNAL_BASE_URL=http://c2d2-avai.staging.svc.cluster.local
+GET ${SYSTEM1_INTERNAL_BASE_URL}/v1/healthz
+POST ${SYSTEM1_INTERNAL_BASE_URL}/v1/ingest
+```
+
+Use this internal URL only from code that runs inside the cluster, such as a
+frontend server, server-side rendering handler, route handler, API proxy, or
+backend-for-frontend process. Do not put the `.svc.cluster.local` URL into a
+browser bundle or public `NEXT_PUBLIC_*`-style variable; user browsers cannot
+resolve Kubernetes service DNS.
+
+Recommended frontend shape:
+
+1. Browser calls the frontend origin, for example
+   `https://<frontend-host>/api/system1/v1/runs/{run_id}`.
+2. Frontend server or proxy forwards the request to
+   `http://c2d2-avai.staging.svc.cluster.local/v1/runs/{run_id}`.
+3. Frontend server injects `X-API-Key` from its Kubernetes Secret when
+   `SYSTEM1_API_KEY` is configured.
+4. Frontend server forwards or generates `X-Trace-Id` and returns the backend
+   `X-Trace-Id` response header to the browser.
+
+With this same-origin proxy pattern, backend CORS can stay disabled:
+
+```yaml
+data:
+  CORS_ALLOW_ORIGINS: ""
+```
+
+Enable backend CORS only when browser JavaScript calls System 1 directly through
+a user-reachable API origin. In that case, set `CORS_ALLOW_ORIGINS` on the
+System 1 deployment to the exact frontend origins:
+
+```yaml
+data:
+  CORS_ALLOW_ORIGINS: "https://<frontend-host>,http://localhost:3000"
+```
+
+The backend allows `GET`, `POST`, and `OPTIONS`, and the headers
+`Authorization`, `Content-Type`, `X-API-Key`, and `X-Trace-Id`. Do not use `*`
+for protected deployments or for credentialed requests. Keep
+`SYSTEM1_API_KEY` server-side; do not expose it in browser JavaScript.
+
+Frontend Kubernetes manifest requirements:
+
+- Add a server-side environment variable for the internal API base URL:
+  `SYSTEM1_INTERNAL_BASE_URL=http://c2d2-avai.staging.svc.cluster.local`.
+- Add `SYSTEM1_API_KEY` to the frontend Secret only if the frontend server or
+  proxy is responsible for authenticating to System 1.
+- Expose only the frontend Service, Ingress, or LoadBalancer to users. Do not
+  point browser code at `192.168.0.252` or any backend-only Service address.
+- Configure frontend readiness and liveness probes against frontend-local
+  health endpoints, not System 1 endpoints.
+- If NetworkPolicies are enabled, allow egress from the frontend pods to the
+  `staging/c2d2-avai` Service on port `80` and allow ingress to System 1 only
+  from the frontend namespace/pod labels and approved operator paths.
+- Keep upload limits aligned with the ingest UI. Reject or compress oversized
+  audio/images before forwarding them to `/v1/ingest`.
+
+Example frontend configuration:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: <frontend-app>-config
+  namespace: staging
+data:
+  SYSTEM1_INTERNAL_BASE_URL: "http://c2d2-avai.staging.svc.cluster.local"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: <frontend-app>
+  namespace: staging
+spec:
+  template:
+    spec:
+      containers:
+        - name: <frontend-app>
+          envFrom:
+            - configMapRef:
+                name: <frontend-app>-config
+          env:
+            - name: SYSTEM1_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: <frontend-app>-secrets
+                  key: SYSTEM1_API_KEY
+                  optional: true
+```
+
+Post-deploy validation:
+
+```bash
+kubectl -n staging exec deploy/<frontend-app> -- \
+  sh -lc 'wget -qO- "$SYSTEM1_INTERNAL_BASE_URL/v1/healthz"'
+kubectl -n staging exec deploy/<frontend-app> -- \
+  sh -lc 'wget -qO- "$SYSTEM1_INTERNAL_BASE_URL/v1/readyz"'
+```
+
+For authenticated operational endpoints, validate through the frontend proxy
+instead of calling System 1 directly from the browser. A successful deployment
+keeps the browser on the frontend origin, keeps `SYSTEM1_API_KEY` inside
+Kubernetes Secrets, and uses the internal Service DNS for pod-to-pod traffic.
+
 ## Primary Frontend Flows
 
 ### 1. Instructor Ingest And Review Loop
@@ -1191,6 +1318,19 @@ Panels:
 ## Integration Checklist
 
 - The frontend uses only `/v1` paths.
+- In-cluster frontend server code calls
+  `http://c2d2-avai.staging.svc.cluster.local`, or `http://c2d2-avai` when it
+  runs in the same namespace.
+- Browser code calls the frontend origin or gateway, not the internal
+  `.svc.cluster.local` URL and not the backend MetalLB IP.
+- `SYSTEM1_API_KEY` is stored in Kubernetes Secrets and injected only into
+  server-side frontend code or a trusted gateway.
+- `CORS_ALLOW_ORIGINS` stays empty when the frontend proxies same-origin
+  browser requests to System 1.
+- If browser JavaScript calls System 1 directly, `CORS_ALLOW_ORIGINS` contains
+  only the exact public frontend origins.
+- NetworkPolicy, gateway, or VPN boundaries prevent direct public access to
+  System 1 operational endpoints.
 - The frontend can submit an `IngestEnvelope` with at least one evidence source.
 - The frontend polls run status until terminal or reviewable state.
 - Pending recommendation cards show score breakdown, policy reasons, evidence,
