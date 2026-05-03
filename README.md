@@ -97,13 +97,13 @@ kubectl -n staging create secret generic c2d2-avai-secrets \
 ```
 
 Add provider and infrastructure keys to the same secret as needed, for example
-`OPENAI_API_KEY`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`,
-`FALKORDB_USERNAME`, `FALKORDB_PASSWORD`, and Langfuse keys. The staging
-ConfigMap defaults to synthetic weather/terrain and the current internal
-services:
+`OPENAI_API_KEY`, `REDIS_URL`, `POSTGRES_DB`, `POSTGRES_USER`,
+`POSTGRES_PASSWORD`, `FALKORDB_USERNAME`, `FALKORDB_PASSWORD`, and Langfuse
+keys. `REDIS_URL` should include the Redis password. The staging ConfigMap
+defaults to synthetic weather/terrain and the current internal services:
 `POSTGRES_HOST=postgres-pgvector.graph-stack.svc.cluster.local`,
-`FALKORDB_HOST=falkordb.graph-stack.svc.cluster.local`, and
-`REDIS_URL=redis://redis-master.graph-stack.svc.cluster.local:6379/0`.
+`FALKORDB_HOST=falkordb.graph-stack.svc.cluster.local`, and Redis at
+`redis-master.graph-stack.svc.cluster.local:6379`.
 
 ## Local Run
 

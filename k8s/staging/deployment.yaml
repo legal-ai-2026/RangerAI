@@ -19,7 +19,6 @@ data:
   FALKORDB_HOST: "falkordb.graph-stack.svc.cluster.local"
   FALKORDB_PORT: "6379"
   FALKORDB_GRAPH: "ranger"
-  REDIS_URL: "redis://redis-master.graph-stack.svc.cluster.local:6379/0"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -54,6 +53,11 @@ spec:
                 secretKeyRef:
                   name: c2d2-avai-secrets
                   key: SYSTEM1_API_KEY
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: c2d2-avai-secrets
+                  key: REDIS_URL
             - name: POSTGRES_DB
               valueFrom:
                 secretKeyRef:
