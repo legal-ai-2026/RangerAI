@@ -126,6 +126,9 @@ Versioned paths are canonical:
 | `GET` | `/v1/runs/{run_id}` | Inspect run state and pending recommendations |
 | `GET` | `/v1/runs/{run_id}/audit` | Inspect run lifecycle and instructor decision audit events |
 | `GET` | `/v1/dashboard/runs/{run_id}` | Frontend-ready platoon and soldier performance summary |
+| `GET` | `/v1/entities/soldiers/{soldier_id}` | Read-only System 1 projection by soldier ID |
+| `GET` | `/v1/entities/missions/{mission_id}` | Read-only System 1 projection by mission ID |
+| `GET` | `/v1/soldiers/{soldier_id}/performance` | Soldier-facing performance metrics and approved recommendations |
 | `POST` | `/v1/recommendations/{id}/decision` | Instructor approve/reject/edit decision |
 | `GET` | `/v1/outbox` | Poll pending integration events |
 | `POST` | `/v1/outbox/{event_id}/published` | Mark an integration event as published |

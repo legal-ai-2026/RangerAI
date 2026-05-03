@@ -4,6 +4,11 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 
 from src.agent.cache import redis_health
 from src.agent.dashboard import build_dashboard_summary
+from src.agent.entities import (
+    build_mission_entity_projection,
+    build_soldier_entity_projection,
+    build_soldier_performance_report,
+)
 from src.agent.store import build_run_store
 from src.agent.vector_store import build_vector_store
 from src.agent.workflow import RangerWorkflow, compile_langgraph_probe
@@ -13,10 +18,13 @@ from src.contracts import (
     AuditEvent,
     DashboardRunSummary,
     IngestEnvelope,
+    MissionEntityProjection,
     OutboxEvent,
     OutboxPublishResponse,
     RecommendationDecision,
     RunRecord,
+    SoldierEntityProjection,
+    SoldierPerformanceReport,
     UpdateLedgerEntry,
 )
 
@@ -83,6 +91,42 @@ def get_run(run_id: str) -> RunRecord:
 @app.get("/v1/dashboard/runs/{run_id}", response_model=DashboardRunSummary)
 def get_dashboard_run(run_id: str) -> DashboardRunSummary:
     return build_dashboard_summary(get_run(run_id))
+
+
+@app.get("/v1/entities/soldiers/{soldier_id}", response_model=SoldierEntityProjection)
+def get_soldier_entity(
+    soldier_id: str,
+    limit: int = 100,
+) -> SoldierEntityProjection:
+    _validate_lookup_limit(limit)
+    projection = build_soldier_entity_projection(store, soldier_id, limit=limit)
+    if projection is None:
+        raise HTTPException(status_code=404, detail="soldier projection not found")
+    return projection
+
+
+@app.get("/v1/entities/missions/{mission_id}", response_model=MissionEntityProjection)
+def get_mission_entity(
+    mission_id: str,
+    limit: int = 100,
+) -> MissionEntityProjection:
+    _validate_lookup_limit(limit)
+    projection = build_mission_entity_projection(store, mission_id, limit=limit)
+    if projection is None:
+        raise HTTPException(status_code=404, detail="mission projection not found")
+    return projection
+
+
+@app.get("/v1/soldiers/{soldier_id}/performance", response_model=SoldierPerformanceReport)
+def get_soldier_performance(
+    soldier_id: str,
+    limit: int = 100,
+) -> SoldierPerformanceReport:
+    _validate_lookup_limit(limit)
+    report = build_soldier_performance_report(store, soldier_id, limit=limit)
+    if report is None:
+        raise HTTPException(status_code=404, detail="soldier performance not found")
+    return report
 
 
 @app.get("/v1/runs/{run_id}/audit", response_model=list[AuditEvent])
@@ -163,3 +207,8 @@ def _run_id_for_recommendation(recommendation_id: str) -> str:
     if run_id is not None:
         return run_id
     raise HTTPException(status_code=404, detail="recommendation not found")
+
+
+def _validate_lookup_limit(limit: int) -> None:
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 500")

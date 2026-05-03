@@ -217,6 +217,101 @@ class DashboardRunSummary(StrictModel):
     soldiers: list[SoldierPerformanceSummary] = Field(default_factory=list)
 
 
+class EntityRunReference(StrictModel):
+    run_id: str
+    mission_id: str
+    platoon_id: str
+    phase: Phase
+    status: RunStatus
+    timestamp_utc: datetime
+    ref: str
+
+
+class EntityObservation(StrictModel):
+    run_id: str
+    observation_id: str
+    soldier_id: str
+    mission_id: str
+    platoon_id: str
+    task_code: str
+    rating: Literal["GO", "NOGO", "UNCERTAIN"]
+    note: str
+    source: Literal["audio", "image", "free_text", "synthetic"]
+    timestamp_utc: datetime
+    ref: str
+
+
+class EntityRecommendation(StrictModel):
+    run_id: str
+    mission_id: str
+    platoon_id: str
+    recommendation: ScenarioRecommendation
+    policy: PolicyDecision
+    status: Literal["pending", "approved", "rejected", "blocked"]
+    ref: str
+
+
+class SoldierEntityProjection(StrictModel):
+    soldier_id: str
+    generated_at_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    runs: list[EntityRunReference] = Field(default_factory=list)
+    observations: list[EntityObservation] = Field(default_factory=list)
+    recommendations: list[EntityRecommendation] = Field(default_factory=list)
+    update_refs: list[str] = Field(default_factory=list)
+
+
+class MissionEntityProjection(StrictModel):
+    mission_id: str
+    generated_at_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    runs: list[EntityRunReference] = Field(default_factory=list)
+    soldier_ids: list[str] = Field(default_factory=list)
+    observations: list[EntityObservation] = Field(default_factory=list)
+    recommendations: list[EntityRecommendation] = Field(default_factory=list)
+    update_refs: list[str] = Field(default_factory=list)
+
+
+class SoldierObservationDigest(StrictModel):
+    run_id: str
+    mission_id: str
+    task_code: str
+    rating: Literal["GO", "NOGO", "UNCERTAIN"]
+    timestamp_utc: datetime
+    source_ref: str
+
+
+class SoldierRecommendationGuidance(StrictModel):
+    recommendation_id: str
+    run_id: str
+    mission_id: str
+    development_edge: DevelopmentEdge
+    rationale: str
+    proposed_modification: str
+    doctrine_refs: list[str]
+    safety_checks: list[str] = Field(default_factory=list)
+    estimated_duration_min: int
+    requires_resources: list[str] = Field(default_factory=list)
+    risk_level: RiskLevel
+    fairness_score: float = Field(ge=0, le=1)
+    evidence_refs: list[EvidenceRef] = Field(default_factory=list)
+
+
+class SoldierPerformanceReport(StrictModel):
+    soldier_id: str
+    generated_at_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    observations_count: int
+    go_count: int
+    nogo_count: int
+    uncertain_count: int
+    go_rate: float = Field(ge=0, le=1)
+    readiness_score: float = Field(ge=0, le=100)
+    metrics: list[PerformanceMetric] = Field(default_factory=list)
+    development_edges: list[DevelopmentEdge] = Field(default_factory=list)
+    approved_recommendations: list[SoldierRecommendationGuidance] = Field(default_factory=list)
+    pending_review_count: int = 0
+    blocked_recommendation_count: int = 0
+    recent_observations: list[SoldierObservationDigest] = Field(default_factory=list)
+
+
 class AuditEvent(StrictModel):
     event_id: str = Field(default_factory=lambda: str(uuid4()))
     run_id: str

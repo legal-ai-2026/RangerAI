@@ -14,6 +14,10 @@ class RunStore(Protocol):
 
     def find_run_id_for_recommendation(self, recommendation_id: str) -> str | None: ...
 
+    def list_runs_for_soldier(self, soldier_id: str, limit: int = 100) -> list[RunRecord]: ...
+
+    def list_runs_for_mission(self, mission_id: str, limit: int = 100) -> list[RunRecord]: ...
+
     def health(self) -> bool: ...
 
     def append_audit_event(self, event: AuditEvent) -> None: ...
@@ -57,6 +61,20 @@ class InMemoryRunStore:
                 if item.recommendation.recommendation_id == recommendation_id:
                     return record.run_id
         return None
+
+    def list_runs_for_soldier(self, soldier_id: str, limit: int = 100) -> list[RunRecord]:
+        matches = [
+            record
+            for record in self.records.values()
+            if _record_mentions_soldier(record, soldier_id)
+        ]
+        return sorted(matches, key=lambda record: record.ingest.timestamp_utc, reverse=True)[:limit]
+
+    def list_runs_for_mission(self, mission_id: str, limit: int = 100) -> list[RunRecord]:
+        matches = [
+            record for record in self.records.values() if record.ingest.mission_id == mission_id
+        ]
+        return sorted(matches, key=lambda record: record.ingest.timestamp_utc, reverse=True)[:limit]
 
     def health(self) -> bool:
         return True
@@ -186,6 +204,61 @@ class PostgresRunStore:
                 (Jsonb(query),),
             ).fetchone()
         return None if row is None else str(row[0])
+
+    def list_runs_for_soldier(self, soldier_id: str, limit: int = 100) -> list[RunRecord]:
+        from psycopg.types.json import Jsonb
+
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+        observation_query = {"observations": [{"soldier_id": soldier_id}]}
+        recommendation_query = {
+            "recommendations": [
+                {"recommendation": {"target_soldier_id": soldier_id}},
+            ],
+        }
+        target_ids_query = {
+            "recommendations": [
+                {"recommendation": {"target_ids": {"soldier_id": soldier_id}}},
+            ],
+        }
+        with self._connect() as conn:
+            self._ensure_schema(conn)
+            rows = conn.execute(
+                """
+                SELECT record
+                FROM ranger_runs
+                WHERE record @> %s OR record @> %s OR record @> %s
+                ORDER BY updated_at DESC
+                LIMIT %s
+                """,
+                (
+                    Jsonb(observation_query),
+                    Jsonb(recommendation_query),
+                    Jsonb(target_ids_query),
+                    limit,
+                ),
+            ).fetchall()
+        return [_record_from_payload(row[0]) for row in rows]
+
+    def list_runs_for_mission(self, mission_id: str, limit: int = 100) -> list[RunRecord]:
+        from psycopg.types.json import Jsonb
+
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+        query = {"ingest": {"mission_id": mission_id}}
+        with self._connect() as conn:
+            self._ensure_schema(conn)
+            rows = conn.execute(
+                """
+                SELECT record
+                FROM ranger_runs
+                WHERE record @> %s
+                ORDER BY updated_at DESC
+                LIMIT %s
+                """,
+                (Jsonb(query), limit),
+            ).fetchall()
+        return [_record_from_payload(row[0]) for row in rows]
 
     def health(self) -> bool:
         try:
@@ -545,6 +618,16 @@ def _record_from_payload(payload: Any) -> RunRecord:
     if isinstance(payload, str):
         return RunRecord.model_validate_json(payload)
     return RunRecord.model_validate(payload)
+
+
+def _record_mentions_soldier(record: RunRecord, soldier_id: str) -> bool:
+    if any(observation.soldier_id == soldier_id for observation in record.observations):
+        return True
+    return any(
+        item.recommendation.target_soldier_id == soldier_id
+        or item.recommendation.target_ids.soldier_id == soldier_id
+        for item in record.recommendations
+    )
 
 
 def _outbox_event_from_row(row: Any) -> OutboxEvent:

@@ -144,6 +144,59 @@ def test_dashboard_summary_includes_soldier_metrics_and_recommendations() -> Non
     assert jones.active_recommendations
 
 
+def test_entity_and_soldier_performance_endpoints_project_existing_records() -> None:
+    store = InMemoryRunStore()
+    workflow = fake_workflow(store)
+    previous_store = main.store
+    previous_workflow = main.workflow
+    try:
+        main.store = store
+        main.workflow = workflow
+        record = workflow.create_run(
+            IngestEnvelope(
+                instructor_id="ri-1",
+                platoon_id="plt-1",
+                mission_id="m-1",
+                phase=Phase.mountain,
+                geo=GeoPoint(lat=35.0, lon=-83.0, grid_mgrs="17S"),
+                free_text=(
+                    "Jones blew Phase Line Bird. Smith asleep at 0300. "
+                    "Garcia textbook ambush rehearsal."
+                ),
+            )
+        )
+        asyncio.run(workflow.process(record.run_id))
+        completed = store.get(record.run_id)
+        assert completed is not None
+        jones_recommendation = next(
+            item
+            for item in completed.recommendations
+            if item.recommendation.target_soldier_id == "Jones"
+        )
+        workflow.approve(
+            completed.run_id,
+            jones_recommendation.recommendation.recommendation_id,
+            approved=True,
+        )
+
+        soldier = main.get_soldier_entity("Jones")
+        mission = main.get_mission_entity("m-1")
+        performance = main.get_soldier_performance("Jones")
+
+        assert soldier.soldier_id == "Jones"
+        assert soldier.observations[0].note
+        assert soldier.update_refs
+        assert mission.mission_id == "m-1"
+        assert mission.soldier_ids == ["Garcia", "Jones", "Smith"]
+        assert len(performance.approved_recommendations) == 1
+        assert performance.pending_review_count == 0
+        assert performance.recent_observations
+        assert not hasattr(performance.recent_observations[0], "note")
+    finally:
+        main.store = previous_store
+        main.workflow = previous_workflow
+
+
 def test_v1_decision_rejects_pending_recommendation() -> None:
     store = InMemoryRunStore()
     workflow = fake_workflow(store)
@@ -181,6 +234,9 @@ def test_api_exposes_only_versioned_operational_routes() -> None:
     paths = {route.path for route in main.app.routes}
     assert "/v1/ingest" in paths
     assert "/v1/runs/{run_id}" in paths
+    assert "/v1/entities/soldiers/{soldier_id}" in paths
+    assert "/v1/entities/missions/{mission_id}" in paths
+    assert "/v1/soldiers/{soldier_id}/performance" in paths
     assert "/v1/runs/{run_id}/audit" in paths
     assert "/v1/recommendations/{recommendation_id}/decision" in paths
     assert "/v1/outbox" in paths

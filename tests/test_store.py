@@ -5,6 +5,7 @@ from src.contracts import (
     DevelopmentEdge,
     GeoPoint,
     IngestEnvelope,
+    Observation,
     OutboxEvent,
     Phase,
     PolicyDecision,
@@ -76,6 +77,39 @@ def test_memory_store_finds_run_by_recommendation_id() -> None:
 
     assert store.find_run_id_for_recommendation("rec-1") == "run-1"
     assert store.find_run_id_for_recommendation("missing") is None
+    assert [item.run_id for item in store.list_runs_for_soldier("Jones")] == ["run-1"]
+    assert store.list_runs_for_soldier("missing") == []
+    assert [item.run_id for item in store.list_runs_for_mission("m-1")] == ["run-1"]
+    assert store.list_runs_for_mission("missing") == []
+
+
+def test_memory_store_finds_runs_by_observed_soldier() -> None:
+    store = InMemoryRunStore()
+    record = RunRecord(
+        run_id="run-observed",
+        status=RunStatus.pending_approval,
+        ingest=IngestEnvelope(
+            instructor_id="ri-1",
+            platoon_id="plt-1",
+            mission_id="m-2",
+            phase=Phase.mountain,
+            geo=GeoPoint(lat=35.0, lon=-83.0, grid_mgrs="17S"),
+            free_text="Smith asleep at 0300.",
+        ),
+        observations=[
+            Observation(
+                observation_id="obs-1",
+                soldier_id="Smith",
+                task_code="PB-7",
+                note="Smith asleep at 0300.",
+                rating="NOGO",
+                source="free_text",
+            )
+        ],
+    )
+    store.put(record)
+
+    assert [item.run_id for item in store.list_runs_for_soldier("Smith")] == ["run-observed"]
 
 
 def test_memory_store_tracks_audit_and_outbox_events() -> None:

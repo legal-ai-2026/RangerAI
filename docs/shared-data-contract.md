@@ -42,6 +42,9 @@ should not write into `ranger_runs`, `ranger_audit_events`, or
 | `POST` | `/v1/ingest` | Frontend or instructor workflow | Start a new processing run | `run_id`, initial `status=accepted`, original `ingest` |
 | `GET` | `/v1/runs/{run_id}` | Frontend, System 2, System 3 | Fetch canonical System 1 run state | `observations`, `recommendations`, `kg_write_summary`, `errors` |
 | `GET` | `/v1/dashboard/runs/{run_id}` | Frontend | Fetch presentation-neutral summary | per-soldier GO/NOGO counts, readiness score, active recommendations |
+| `GET` | `/v1/entities/soldiers/{soldier_id}` | Frontend, System 2, System 3 | Fetch System 1's read-only projection for a soldier ID | runs, observations, recommendation records, and update refs tied to that soldier |
+| `GET` | `/v1/entities/missions/{mission_id}` | Frontend, System 2, System 3 | Fetch System 1's read-only projection for a mission ID | runs, soldier IDs, observations, recommendation records, and update refs tied to that mission |
+| `GET` | `/v1/soldiers/{soldier_id}/performance` | Soldier-facing app or frontend | Fetch self-service performance guidance | aggregate metrics, recent task ratings, and instructor-approved recommendations only |
 | `GET` | `/v1/runs/{run_id}/audit` | Frontend, System 2, System 3 | Inspect lifecycle and decision events | immutable `AuditEvent[]` ordered by timestamp |
 | `POST` | `/v1/recommendations/{recommendation_id}/decision` | Frontend/instructor workflow | Approve or reject a recommendation | `ApprovalResponse` with final status |
 | `GET` | `/v1/outbox` | System 2, System 3, integration workers | Poll pending System 1 decision events | `OutboxEvent[]` |
@@ -140,6 +143,23 @@ Derived `Observation`:
 - `policy.reasons`
 - `policy.fairness_score`
 - `status`
+
+`SoldierEntityProjection` is a read-only System 1 projection by canonical
+soldier ID. It includes:
+
+- matching `runs`
+- matching `observations`
+- matching `recommendations` with policy and status
+- `update_refs` pointing at `ranger_update_ledger` entries
+
+`MissionEntityProjection` is the same pattern by canonical mission ID. It also
+includes the set of `soldier_ids` System 1 observed or targeted in that mission.
+
+`SoldierPerformanceReport` is for soldier-facing display. It intentionally does
+not expose raw instructor audio, image payloads, OCR pages, or unapproved
+recommendation drafts. It returns aggregate performance counts, recent task
+ratings, `pending_review_count`, `blocked_recommendation_count`, and only
+`approved_recommendations`.
 
 `OutboxEvent.payload` currently contains:
 
@@ -506,6 +526,9 @@ System 1 currently exposes:
 ```text
 GET /v1/outbox
 GET /v1/update-ledger
+GET /v1/entities/soldiers/{soldier_id}
+GET /v1/entities/missions/{mission_id}
+GET /v1/soldiers/{soldier_id}/performance
 POST /v1/outbox/{event_id}/published
 ```
 
@@ -538,7 +561,6 @@ Every app should have tests or evals proving:
 - Add a drift detection comparison helper over `ranger_update_ledger`.
 - Add pgvector ingestion for doctrine, observations, lessons, and trajectory
   summaries.
-- Add cross-system endpoints for soldier/mission detail lookup by canonical ID.
 - Add frontend stale-version indicators.
 
 ## System 2 Project Profile
