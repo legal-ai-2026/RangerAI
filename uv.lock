@@ -265,7 +265,7 @@ requires-dist = [
     { name = "langgraph", specifier = "==1.1.0" },
     { name = "mistralai", specifier = "==1.5.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = "==1.14.1" },
-    { name = "openai", specifier = "==1.54.0" },
+    { name = "openai", specifier = ">=1.59.0" },
     { name = "psycopg", extras = ["binary"], specifier = "==3.2.3" },
     { name = "pydantic", specifier = "==2.10.4" },
     { name = "pytest", marker = "extra == 'dev'", specifier = "==8.3.4" },
@@ -1686,7 +1686,7 @@ wheels = [
 
 [[package]]
 name = "openai"
-version = "1.54.0"
+version = "1.109.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -1698,9 +1698,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6d/15/2bf6bb16e49c5a56beae6586aa83785578a875c544349f84a2ccac38e221/openai-1.54.0.tar.gz", hash = "sha256:df2a84384314165b706722a7ac8988dc33eba20dd7fc3b939d138110e608b1ce", size = 312249, upload-time = "2024-11-04T22:51:19.274Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c6/a1/a303104dc55fc546a3f6914c842d3da471c64eec92043aef8f652eb6c524/openai-1.109.1.tar.gz", hash = "sha256:d173ed8dbca665892a6db099b4a2dfac624f94d20a93f46eb0b56aae940ed869", size = 564133, upload-time = "2025-09-24T13:00:53.075Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9b/60/d3925bbd89c19dfa00eefc91ea5109b6cb2a9b1c133a2519c28277738ed1/openai-1.54.0-py3-none-any.whl", hash = "sha256:24ed8874b56e919f0fbb80b7136c3fb022dc82ce9f5f21579b7b280ea4bba249", size = 389267, upload-time = "2024-11-04T22:51:16.91Z" },
+    { url = "https://files.pythonhosted.org/packages/1d/2a/7dd3d207ec669cacc1f186fd856a0f61dbc255d24f6fdc1a6715d6051b0f/openai-1.109.1-py3-none-any.whl", hash = "sha256:6bcaf57086cf59159b8e27447e4e7dd019db5d29a438072fbd49c290c7e65315", size = 948627, upload-time = "2025-09-24T13:00:50.754Z" },
 ]
 
 [[package]]
