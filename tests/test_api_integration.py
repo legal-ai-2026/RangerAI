@@ -121,15 +121,50 @@ def test_http_ingest_review_decision_and_soldier_performance_flow(monkeypatch) -
     dashboard = main.get_dashboard_run(run_id)
     assert dashboard.pending_recommendations == 3
 
+    edited = recommendation.model_copy(
+        update={
+            "rationale": (
+                "Instructor narrowed the intervention to test Jones on concise "
+                "reports without adding avoidable physical load."
+            ),
+            "proposed_modification": (
+                "At the next covered halt, have Jones issue a two-minute SITREP "
+                "and delegate one confirmation report to an assistant team leader."
+            ),
+        }
+    )
     decision = main.decide_recommendation(
         recommendation.recommendation_id,
-        RecommendationDecision(decision="approve"),
+        RecommendationDecision(decision="approve", edited_recommendation=edited),
     )
     assert decision.status == "approved"
 
+    updated = main.get_run(run_id)
+    approved = next(
+        item
+        for item in updated.recommendations
+        if item.recommendation.recommendation_id == decision.recommendation_id
+    )
+    assert approved.recommendation.created_by == "instructor"
+    assert "two-minute SITREP" in approved.recommendation.proposed_modification
+
     performance = main.get_soldier_performance("Jones")
     assert performance.approved_recommendations
+    assert "two-minute SITREP" in performance.approved_recommendations[0].proposed_modification
     assert not hasattr(performance.recent_observations[0], "note")
+
+    audit = main.get_run_audit(run_id)
+    decision_event = next(
+        event for event in audit if event.recommendation_id == decision.recommendation_id
+    )
+    assert decision_event.payload["edited"] is True
+    outbox = main.list_pending_outbox_events()
+    assert outbox[0].payload["edited"] is True
+    updates = main.store.list_update_events(
+        entity_type="recommendation",
+        entity_id=decision.recommendation_id,
+    )
+    assert "two-minute SITREP" in updates[0].patch["recommendation"]["proposed_modification"]
 
 
 def test_configured_api_key_is_required_for_operational_v1_routes(monkeypatch) -> None:

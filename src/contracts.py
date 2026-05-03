@@ -197,6 +197,12 @@ class RecommendationDecision(StrictModel):
     decision: Literal["approve", "reject"]
     edited_recommendation: ScenarioRecommendation | None = None
 
+    @model_validator(mode="after")
+    def require_approval_for_edits(self) -> "RecommendationDecision":
+        if self.edited_recommendation is not None and self.decision != "approve":
+            raise ValueError("edited_recommendation can only be submitted with approve")
+        return self
+
 
 class PerformanceMetric(StrictModel):
     name: str

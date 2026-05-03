@@ -130,7 +130,7 @@ make infra-health
 - `GET /v1/entities/soldiers/{soldier_id}` returns System 1's read-only projection for a soldier ID.
 - `GET /v1/entities/missions/{mission_id}` returns System 1's read-only projection for a mission ID.
 - `GET /v1/soldiers/{soldier_id}/performance` returns soldier-facing performance metrics and instructor-approved recommendations.
-- `POST /v1/recommendations/{recommendation_id}/decision` records instructor approval or rejection.
+- `POST /v1/recommendations/{recommendation_id}/decision` records instructor approval, edited approval, or rejection.
 - `GET /v1/outbox` returns pending integration events for external workers.
 - `POST /v1/outbox/{event_id}/published` marks an outbox event as published.
 - `GET /v1/healthz` reports configured providers, FalkorDB health, and LangGraph importability.

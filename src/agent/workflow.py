@@ -127,7 +127,20 @@ class RangerWorkflow:
         finally:
             lease.release()
 
-    def approve(self, run_id: str, recommendation_id: str, approved: bool) -> ApprovalResponse:
+    def approve(
+        self,
+        run_id: str,
+        recommendation_id: str,
+        approved: bool,
+        edited_recommendation: ScenarioRecommendation | None = None,
+    ) -> ApprovalResponse:
+        if edited_recommendation is not None and not approved:
+            raise ValueError("edited recommendations can only be submitted with approval")
+        if (
+            edited_recommendation is not None
+            and edited_recommendation.recommendation_id != recommendation_id
+        ):
+            raise ValueError("edited recommendation id must match the decision target")
         lease = self.lease.acquire(run_id)
         if not lease.acquired:
             raise ValueError("run is already being processed")
@@ -141,12 +154,15 @@ class RangerWorkflow:
             else:
                 raise KeyError(f"recommendation {recommendation_id} not found")
 
-            command = make_resume_command(
-                {
-                    "recommendation_id": recommendation_id,
-                    "decision": "approve" if approved else "reject",
-                }
-            )
+            resume_payload: dict[str, object] = {
+                "recommendation_id": recommendation_id,
+                "decision": "approve" if approved else "reject",
+            }
+            if edited_recommendation is not None:
+                resume_payload["edited_recommendation"] = edited_recommendation.model_dump(
+                    mode="json"
+                )
+            command = make_resume_command(resume_payload)
             output = self._invoke_resume(run_id, command)
             updated = self._put_state(
                 run_id,
@@ -171,7 +187,10 @@ class RangerWorkflow:
                             event_type="recommendation_decision_recorded",
                             actor_id=record.ingest.instructor_id,
                             recommendation_id=recommendation_id,
-                            payload={"status": decision_status},
+                            payload={
+                                "status": decision_status,
+                                "edited": edited_recommendation is not None,
+                            },
                         )
                     )
                     event_type: Literal["recommendation.approved", "recommendation.rejected"] = (
@@ -197,6 +216,7 @@ class RangerWorkflow:
                                 ],
                                 "model_context_refs": list(item.recommendation.model_context_refs),
                                 "policy_refs": list(item.recommendation.policy_refs),
+                                "edited": edited_recommendation is not None,
                             },
                         )
                     )
@@ -288,6 +308,7 @@ def _recommendation_update_event(
     patch: dict[str, object] = {
         "recommendation_id": recommendation.recommendation_id,
         "status": status,
+        "recommendation": recommendation.model_dump(mode="json"),
         "target_ids": recommendation.target_ids.model_dump(mode="json", exclude_none=True),
         "evidence_refs": [ref.model_dump(mode="json") for ref in recommendation.evidence_refs],
         "model_context_refs": list(recommendation.model_context_refs),

@@ -60,6 +60,7 @@ ApprovalAction = Literal["approve", "reject"]
 class ApprovalResume(TypedDict):
     recommendation_id: str
     decision: ApprovalAction
+    edited_recommendation: NotRequired[ScenarioRecommendation]
 
 
 class PendingRecommendationCard(TypedDict):
@@ -207,7 +208,7 @@ class RangerGraphNodes:
         payload = _pending_payload(state)
         resume = interrupt(payload)
         decision = _parse_resume(resume)
-        records = _apply_decision(records, decision)
+        records = _apply_decision(records, decision, state.get("observations", []))
         return {
             "recommendations": records,
             "approval_decisions": [*state.get("approval_decisions", []), decision],
@@ -244,7 +245,11 @@ class FallbackRangerGraph:
         if _is_command(input_data):
             state = self.checkpoints[thread_id]
             decision = _parse_resume(_command_resume(input_data))
-            records = _apply_decision(list(state.get("recommendations", [])), decision)
+            records = _apply_decision(
+                list(state.get("recommendations", [])),
+                decision,
+                state.get("observations", []),
+            )
             state = {
                 **state,
                 "recommendations": records,
@@ -289,7 +294,7 @@ class FallbackRangerGraph:
         return Snapshot(self.checkpoints[_thread_id(config)])
 
 
-def make_resume_command(payload: ApprovalResume) -> Any:
+def make_resume_command(payload: dict[str, object]) -> Any:
     if Command is None:
         return {"resume": payload}
     return Command(resume=payload)
@@ -412,12 +417,30 @@ def _parse_resume(value: Any) -> ApprovalResume:
     decision = value.get("decision")
     if not isinstance(recommendation_id, str) or decision not in {"approve", "reject"}:
         raise ValueError("approval resume payload requires recommendation_id and decision")
-    return {"recommendation_id": recommendation_id, "decision": decision}
+    parsed: ApprovalResume = {"recommendation_id": recommendation_id, "decision": decision}
+    edited_value = value.get("edited_recommendation")
+    if edited_value is None:
+        return parsed
+    if decision != "approve":
+        raise ValueError("edited recommendations can only be approved")
+    try:
+        edited = (
+            edited_value
+            if isinstance(edited_value, ScenarioRecommendation)
+            else ScenarioRecommendation.model_validate(edited_value)
+        )
+    except Exception as exc:
+        raise ValueError("edited recommendation payload is invalid") from exc
+    if edited.recommendation_id != recommendation_id:
+        raise ValueError("edited recommendation id must match the decision target")
+    parsed["edited_recommendation"] = edited
+    return parsed
 
 
 def _apply_decision(
     records: list[RecommendationRecord],
     decision: ApprovalResume,
+    observations: list[Observation] | None = None,
 ) -> list[RecommendationRecord]:
     changed = False
     updated: list[RecommendationRecord] = []
@@ -431,14 +454,60 @@ def _apply_decision(
         if item.status == "blocked":
             updated.append(item)
             continue
+        recommendation = item.recommendation
+        policy = item.policy
+        if "edited_recommendation" in decision:
+            recommendation = _merge_instructor_edit(
+                item.recommendation,
+                decision["edited_recommendation"],
+            )
+            policy = PolicyEngine(observations_to_roster(observations or [])).evaluate(
+                recommendation
+            )
+            recommendation = recommendation.model_copy(
+                update={"fairness_score": policy.fairness_score}
+            )
+            if not policy.allowed:
+                reasons = "; ".join(policy.reasons)
+                raise ValueError(f"edited recommendation failed policy: {reasons}")
         updated.append(
             item.model_copy(
-                update={"status": "approved" if decision["decision"] == "approve" else "rejected"}
+                update={
+                    "recommendation": recommendation,
+                    "policy": policy,
+                    "status": "approved" if decision["decision"] == "approve" else "rejected",
+                }
             )
         )
     if not changed:
         raise KeyError(f"recommendation {decision['recommendation_id']} not found")
     return updated
+
+
+def _merge_instructor_edit(
+    original: ScenarioRecommendation,
+    edited: ScenarioRecommendation,
+) -> ScenarioRecommendation:
+    target_ids = TargetIds(
+        soldier_id=edited.target_ids.soldier_id or edited.target_soldier_id,
+        platoon_id=edited.target_ids.platoon_id or original.target_ids.platoon_id,
+        patrol_id=edited.target_ids.patrol_id or original.target_ids.patrol_id,
+        mission_id=edited.target_ids.mission_id or original.target_ids.mission_id,
+        task_code=edited.target_ids.task_code or original.target_ids.task_code,
+    )
+    return edited.model_copy(
+        update={
+            "recommendation_id": original.recommendation_id,
+            "target_ids": target_ids,
+            "evidence_refs": edited.evidence_refs or original.evidence_refs,
+            "model_context_refs": edited.model_context_refs or original.model_context_refs,
+            "policy_refs": edited.policy_refs or original.policy_refs,
+            "intervention_id": edited.intervention_id or original.intervention_id,
+            "learning_objective": edited.learning_objective or original.learning_objective,
+            "score_breakdown": edited.score_breakdown or original.score_breakdown,
+            "created_by": "instructor",
+        }
+    )
 
 
 def _all_decided(records: list[RecommendationRecord]) -> bool:

@@ -47,6 +47,22 @@ def test_recommendation_decision_rejects_unknown_action() -> None:
         RecommendationDecision(decision="defer")
 
 
+def test_recommendation_decision_rejects_edit_without_approval() -> None:
+    edited = ScenarioRecommendation(
+        target_soldier_id="Jones",
+        rationale="Instructor edit keeps the recommendation bounded and evidence-linked.",
+        development_edge=DevelopmentEdge.communications,
+        proposed_modification="Have Jones issue a two-minute SITREP at the next halt.",
+        doctrine_refs=["TC 3-21.76 MV-2"],
+        estimated_duration_min=10,
+        risk_level=RiskLevel.low,
+        fairness_score=1.0,
+    )
+
+    with pytest.raises(ValidationError):
+        RecommendationDecision(decision="reject", edited_recommendation=edited)
+
+
 def test_recommendation_carries_cross_system_provenance() -> None:
     recommendation = ScenarioRecommendation(
         target_soldier_id="Jones",

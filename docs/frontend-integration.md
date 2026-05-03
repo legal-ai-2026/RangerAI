@@ -164,9 +164,14 @@ Frontend behavior:
 - Show `policy.reasons[]` for blocked items.
 - Refresh `GET /v1/runs/{run_id}` after every decision.
 - Treat `409` as a conflict, usually because the run is being processed or a
-  blocked recommendation was incorrectly approved.
-- Edited recommendations are not implemented. Sending
-  `edited_recommendation` currently returns `501`.
+  blocked or edited recommendation failed policy.
+- To approve an instructor edit, send `decision="approve"` with a full
+  `edited_recommendation` object whose `recommendation_id` matches the path ID.
+  The backend preserves provenance fields from the original draft when the edit
+  omits them, marks `created_by="instructor"`, reruns policy, and only emits the
+  approved edited object.
+- Do not send `edited_recommendation` with `decision="reject"`; validation
+  rejects that combination.
 
 ### 4. Soldier-Facing Performance View
 
@@ -395,6 +400,7 @@ Important fields:
 - `evidence_refs`
 - `model_context_refs`
 - `policy_refs`
+- `created_by`
 - `created_at_utc`
 
 `score_breakdown` is for transparency, not approval. The instructor decision
@@ -504,7 +510,6 @@ Expected errors:
 | `404` | Run, recommendation, soldier projection, or mission projection not found. | Show not-found state and allow navigation back. |
 | `409` | Run is processing or invalid approval conflict. | Refresh run state and disable stale controls. |
 | `422` | Invalid payload or query limit. | Show validation messages near the form. |
-| `501` | Edited recommendation submitted. | Hide edit submit or show "not implemented". |
 | `5xx` | Provider, infrastructure, or unexpected backend failure. | Show operator-facing failure, inspect run errors if available. |
 
 Limit query parameters:
@@ -665,10 +670,12 @@ Panels:
 - Pending recommendation cards show score breakdown, policy reasons, evidence,
   doctrine refs, and safety checks.
 - Approve/reject calls use `recommendation_id`.
+- Edited approvals send a full `edited_recommendation` with the same
+  `recommendation_id`.
 - Blocked recommendations cannot be approved in UI.
 - Soldier-facing views use `/v1/soldiers/{soldier_id}/performance`.
 - Cross-app drilldowns use entity projection endpoints.
 - Raw audio/image payloads are not persisted in frontend state after upload.
-- Errors `404`, `409`, `422`, and `501` have explicit UI states.
+- Errors `404`, `409`, and `422` have explicit UI states.
 - The deployment path provides authentication and network protection before
   exposing the API to users.

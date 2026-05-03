@@ -28,6 +28,7 @@ from src.contracts import (
     OutboxPublishResponse,
     RecommendationDecision,
     RunRecord,
+    ScenarioRecommendation,
     SoldierEntityProjection,
     SoldierPerformanceReport,
     UpdateLedgerEntry,
@@ -195,9 +196,18 @@ def mark_outbox_event_published(event_id: str) -> OutboxPublishResponse:
     return OutboxPublishResponse(event_id=event_id, status="published")
 
 
-def _approve_recommendation(run_id: str, recommendation_id: str) -> ApprovalResponse:
+def _approve_recommendation(
+    run_id: str,
+    recommendation_id: str,
+    edited_recommendation: ScenarioRecommendation | None = None,
+) -> ApprovalResponse:
     try:
-        return workflow.approve(run_id, recommendation_id, approved=True)
+        return workflow.approve(
+            run_id,
+            recommendation_id,
+            approved=True,
+            edited_recommendation=edited_recommendation,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -213,9 +223,12 @@ def _reject_recommendation(run_id: str, recommendation_id: str) -> ApprovalRespo
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-def _approve_recommendation_by_id(recommendation_id: str) -> ApprovalResponse:
+def _approve_recommendation_by_id(
+    recommendation_id: str,
+    edited_recommendation: ScenarioRecommendation | None = None,
+) -> ApprovalResponse:
     run_id = _run_id_for_recommendation(recommendation_id)
-    return _approve_recommendation(run_id, recommendation_id)
+    return _approve_recommendation(run_id, recommendation_id, edited_recommendation)
 
 
 def _reject_recommendation_by_id(recommendation_id: str) -> ApprovalResponse:
@@ -228,12 +241,11 @@ def decide_recommendation(
     recommendation_id: str,
     decision: RecommendationDecision,
 ) -> ApprovalResponse:
-    if decision.edited_recommendation is not None:
-        raise HTTPException(
-            status_code=501, detail="edited recommendations are not implemented yet"
-        )
     if decision.decision == "approve":
-        return _approve_recommendation_by_id(recommendation_id)
+        return _approve_recommendation_by_id(
+            recommendation_id,
+            decision.edited_recommendation,
+        )
     return _reject_recommendation_by_id(recommendation_id)
 
 

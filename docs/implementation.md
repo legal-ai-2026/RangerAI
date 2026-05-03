@@ -2,7 +2,7 @@
 
 ## Build Priorities
 
-1. Keep `POST /v1/ingest -> GET /v1/runs/{id} -> dashboard summary -> approve/reject` working at all times.
+1. Keep `POST /v1/ingest -> GET /v1/runs/{id} -> dashboard summary -> approve/edit/reject` working at all times.
 2. Prefer typed Pydantic contracts over ad hoc dictionaries.
 3. Keep external model and database access behind adapters so tests remain deterministic.
 4. Do not add a frontend to this repository.
