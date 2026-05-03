@@ -142,3 +142,6 @@ The API validates payloads with Pydantic v2, scrubs common PII patterns before L
 ## Agent Guidance
 
 Read `AGENT.md` before substantial changes. It records project boundaries, PR rejection triggers, DoD AI ethics mapping, and cross-system contract reminders.
+
+For cross-app shared data rules, canonical IDs, provenance requirements, and
+drift tracking, use `docs/shared-data-contract.md`.

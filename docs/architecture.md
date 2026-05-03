@@ -94,6 +94,10 @@ Seed `Task` data from TC 3-21.76 tasks such as PB-1 perimeter, PB-3 OPORD, PB-7 
 
 ## Data Contracts
 
+Shared IDs, provenance rules, store ownership, and drift tracking are defined in
+`docs/shared-data-contract.md`. All Systems 1, 2, and 3 integrations should use
+that document as the cross-app contract.
+
 Inbound `IngestEnvelope` includes `envelope_id`, `instructor_id`, `platoon_id`, `mission_id`, `phase`, `timestamp_utc`, `geo`, optional `audio_b64`, `image_b64[]`, and optional `free_text`. Inbound models use Pydantic v2 with `extra="forbid"`.
 
 Outbound `ScenarioRecommendation` includes `target_soldier_id`, `rationale`, `development_edge`, `proposed_modification`, non-empty `doctrine_refs`, `safety_checks`, `estimated_duration_min`, `requires_resources`, `risk_level`, and `fairness_score`.
