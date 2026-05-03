@@ -38,6 +38,8 @@ Add the final connection values to your local environment before running the
 app. The exact values depend on your cluster and network setup:
 
 ```env
+DATABASE_URL=
+PGVECTOR_CONNECTION_STRING=
 POSTGRES_HOST=
 POSTGRES_PORT=5432
 POSTGRES_DB=
@@ -51,6 +53,7 @@ REDIS_URL=redis://:password@host:6379/0
 FALKORDB_HOST=
 FALKORDB_PORT=6379
 FALKORDB_GRAPH=ranger
+FALKORDB_URL=
 FALKORDB_USERNAME=
 FALKORDB_PASSWORD=
 ```

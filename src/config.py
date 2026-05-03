@@ -6,6 +6,14 @@ from dataclasses import dataclass, field
 from src.agent.models import MODEL_CLAUDE_SONNET, MODEL_OPENAI_MULTIMODAL, MODEL_OPENAI_WHISPER
 
 
+def psycopg_dsn(url: str | None) -> str | None:
+    if not url:
+        return None
+    if url.startswith("postgresql+psycopg://"):
+        return "postgresql://" + url.removeprefix("postgresql+psycopg://")
+    return url
+
+
 @dataclass(frozen=True)
 class Settings:
     anthropic_api_key: str | None = field(default=os.getenv("ANTHROPIC_API_KEY"), repr=False)
@@ -17,6 +25,11 @@ class Settings:
     mistral_api_key: str | None = field(default=os.getenv("MISTRAL_API_KEY"), repr=False)
     openweather_api_key: str | None = field(default=os.getenv("OPENWEATHER_API_KEY"), repr=False)
 
+    database_url: str | None = field(default=os.getenv("DATABASE_URL"), repr=False)
+    pgvector_connection_string: str | None = field(
+        default=os.getenv("PGVECTOR_CONNECTION_STRING"),
+        repr=False,
+    )
     postgres_host: str | None = os.getenv("POSTGRES_HOST")
     postgres_port: int = int(os.getenv("POSTGRES_PORT", "5432"))
     postgres_db: str | None = os.getenv("POSTGRES_DB")
@@ -28,6 +41,7 @@ class Settings:
     falkordb_host: str = os.getenv("FALKORDB_HOST", "localhost")
     falkordb_port: int = int(os.getenv("FALKORDB_PORT", "6379"))
     falkordb_graph: str = os.getenv("FALKORDB_GRAPH", "ranger")
+    falkordb_url: str | None = field(default=os.getenv("FALKORDB_URL"), repr=False)
     falkordb_username: str | None = field(default=os.getenv("FALKORDB_USERNAME"), repr=False)
     falkordb_password: str | None = field(default=os.getenv("FALKORDB_PASSWORD"), repr=False)
     redis_url: str | None = os.getenv("REDIS_URL")
@@ -37,6 +51,8 @@ class Settings:
 
     @property
     def postgres_configured(self) -> bool:
+        if self.database_url or self.pgvector_connection_string:
+            return True
         return all(
             [
                 self.postgres_host,
@@ -45,6 +61,14 @@ class Settings:
                 self.postgres_password,
             ]
         )
+
+    @property
+    def run_store_dsn(self) -> str | None:
+        return psycopg_dsn(self.database_url)
+
+    @property
+    def vector_store_dsn(self) -> str | None:
+        return psycopg_dsn(self.pgvector_connection_string or self.database_url)
 
 
 settings = Settings()

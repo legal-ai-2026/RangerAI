@@ -23,6 +23,18 @@ def test_build_vector_store_uses_postgres_config_and_dimensions() -> None:
     assert store.dimensions == 3
 
 
+def test_build_vector_store_uses_pgvector_connection_string() -> None:
+    store = build_vector_store(
+        Settings(
+            pgvector_connection_string="postgresql+psycopg://app:secret@postgres:5432/ranger",
+            embedding_dimensions=3,
+        )
+    )
+
+    assert isinstance(store, PgVectorStore)
+    assert store.dsn == "postgresql://app:secret@postgres:5432/ranger"
+
+
 def test_vector_literal_formats_numeric_values_for_pgvector_cast() -> None:
     assert vector_literal([1, 0.25, -2]) == "[1.0,0.25,-2.0]"
 

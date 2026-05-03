@@ -90,11 +90,12 @@ class InMemoryRunStore:
 
 @dataclass
 class PostgresRunStore:
-    host: str
-    port: int
-    dbname: str
-    user: str
-    password: str
+    host: str = ""
+    port: int = 5432
+    dbname: str = ""
+    user: str = ""
+    password: str = ""
+    dsn: str | None = None
     sslmode: str = "require"
     _schema_ready: bool = field(default=False, init=False, repr=False)
 
@@ -102,6 +103,8 @@ class PostgresRunStore:
     def from_settings(cls, config: Settings) -> "PostgresRunStore":
         if not config.postgres_configured:
             raise ValueError("Postgres run store requires POSTGRES_HOST, DB, USER, and PASSWORD")
+        if config.run_store_dsn:
+            return cls(dsn=config.run_store_dsn)
         return cls(
             host=str(config.postgres_host),
             port=config.postgres_port,
@@ -327,6 +330,8 @@ class PostgresRunStore:
     def _connect(self) -> Any:
         import psycopg
 
+        if self.dsn:
+            return psycopg.connect(self.dsn, connect_timeout=5)
         return psycopg.connect(
             host=self.host,
             port=self.port,

@@ -32,6 +32,12 @@ def test_build_run_store_uses_postgres_when_configured() -> None:
     assert isinstance(store, PostgresRunStore)
 
 
+def test_build_run_store_uses_database_url_when_configured() -> None:
+    store = build_run_store(Settings(database_url="postgresql://app:secret@postgres:5432/ranger"))
+    assert isinstance(store, PostgresRunStore)
+    assert store.dsn == "postgresql://app:secret@postgres:5432/ranger"
+
+
 def test_memory_store_finds_run_by_recommendation_id() -> None:
     store = InMemoryRunStore()
     recommendation = ScenarioRecommendation(

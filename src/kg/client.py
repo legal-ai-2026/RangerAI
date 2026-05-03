@@ -9,6 +9,7 @@ from src.contracts import IngestEnvelope, Observation, ScenarioRecommendation
 
 @dataclass
 class KGClient:
+    url: str | None = settings.falkordb_url
     host: str = settings.falkordb_host
     port: int = settings.falkordb_port
     graph_name: str = settings.falkordb_graph
@@ -20,12 +21,16 @@ class KGClient:
         if self._graph is None:
             from falkordb import FalkorDB  # type: ignore[import-untyped]
 
-            self._graph = FalkorDB(
-                host=self.host,
-                port=self.port,
-                username=self.username,
-                password=self.password,
-            ).select_graph(self.graph_name)
+            if self.url:
+                client = FalkorDB.from_url(self.url)
+            else:
+                client = FalkorDB(
+                    host=self.host,
+                    port=self.port,
+                    username=self.username,
+                    password=self.password,
+                )
+            self._graph = client.select_graph(self.graph_name)
         return self._graph
 
     def health(self) -> bool:
