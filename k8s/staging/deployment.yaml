@@ -173,7 +173,8 @@ metadata:
   namespace: staging
   labels:
     app: c2d2-avai
-  # Add metallb.universe.tf/loadBalancerIPs here after a dedicated IP is assigned.
+  annotations:
+    metallb.universe.tf/loadBalancerIPs: "192.168.0.252"
 spec:
   type: LoadBalancer
   selector:

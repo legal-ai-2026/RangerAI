@@ -29,7 +29,22 @@ steps:
       - kubectl config use-context homelab
       - sed -i "s|IMAGE_TAG|$SHORT_SHA|g" k8s/staging/deployment.yaml
       - kubectl apply -f k8s/staging/deployment.yaml
-      - kubectl rollout status deployment/c2d2-avai --namespace=staging --timeout=180s
+      - |
+        i=0
+        while [ "$i" -lt 36 ]; do
+          DESIRED=$(kubectl get deployment/c2d2-avai --namespace=staging -o jsonpath='{.spec.replicas}')
+          UPDATED=$(kubectl get deployment/c2d2-avai --namespace=staging -o jsonpath='{.status.updatedReplicas}')
+          AVAILABLE=$(kubectl get deployment/c2d2-avai --namespace=staging -o jsonpath='{.status.availableReplicas}')
+          if [ "${UPDATED:-0}" = "${DESIRED:-1}" ] && [ "${AVAILABLE:-0}" = "${DESIRED:-1}" ]; then
+            kubectl get deployment/c2d2-avai --namespace=staging
+            exit 0
+          fi
+          i=$((i + 1))
+          sleep 5
+        done
+        kubectl get deployment/c2d2-avai --namespace=staging
+        kubectl get pods --namespace=staging -l app=c2d2-avai
+        exit 1
     environment:
       K8S_TOKEN:
         from_secret: K8S_TOKEN_STAGING
