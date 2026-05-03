@@ -8,6 +8,7 @@ from src.contracts import (
     EvidenceRef,
     GeoPoint,
     IngestEnvelope,
+    LessonsLearnedSignal,
     Phase,
     RecommendationDecision,
     RiskLevel,
@@ -61,6 +62,14 @@ def test_recommendation_decision_rejects_edit_without_approval() -> None:
 
     with pytest.raises(ValidationError):
         RecommendationDecision(decision="reject", edited_recommendation=edited)
+
+
+def test_lesson_signal_requires_canonical_linkage() -> None:
+    with pytest.raises(ValidationError):
+        LessonsLearnedSignal(
+            lesson_id="lesson-1",
+            summary="A valid summary still needs a canonical mission, task, soldier, or recommendation link.",
+        )
 
 
 def test_recommendation_carries_cross_system_provenance() -> None:

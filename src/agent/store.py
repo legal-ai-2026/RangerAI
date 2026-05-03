@@ -4,7 +4,13 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from src.config import Settings, settings
-from src.contracts import AuditEvent, OutboxEvent, RunRecord, UpdateLedgerEntry
+from src.contracts import (
+    AuditEvent,
+    LessonsLearnedSignal,
+    OutboxEvent,
+    RunRecord,
+    UpdateLedgerEntry,
+)
 
 
 class RunStore(Protocol):
@@ -41,6 +47,10 @@ class RunStore(Protocol):
         limit: int = 100,
     ) -> list[UpdateLedgerEntry]: ...
 
+    def put_lesson_signal(self, lesson: LessonsLearnedSignal) -> bool: ...
+
+    def get_lesson_signal(self, lesson_id: str) -> LessonsLearnedSignal | None: ...
+
 
 @dataclass
 class InMemoryRunStore:
@@ -48,6 +58,7 @@ class InMemoryRunStore:
     audit_events: dict[str, list[AuditEvent]] = field(default_factory=dict)
     outbox_events: dict[str, list[OutboxEvent]] = field(default_factory=dict)
     update_events: list[UpdateLedgerEntry] = field(default_factory=list)
+    lesson_signals: dict[str, LessonsLearnedSignal] = field(default_factory=dict)
 
     def put(self, record: RunRecord) -> None:
         self.records[record.run_id] = record
@@ -131,6 +142,15 @@ class InMemoryRunStore:
         if entity_id is not None:
             events = [event for event in events if event.entity_id == entity_id]
         return sorted(events, key=lambda event: event.created_at_utc)[:limit]
+
+    def put_lesson_signal(self, lesson: LessonsLearnedSignal) -> bool:
+        if lesson.lesson_id in self.lesson_signals:
+            return False
+        self.lesson_signals[lesson.lesson_id] = lesson
+        return True
+
+    def get_lesson_signal(self, lesson_id: str) -> LessonsLearnedSignal | None:
+        return self.lesson_signals.get(lesson_id)
 
 
 @dataclass
@@ -508,6 +528,41 @@ class PostgresRunStore:
             ).fetchall()
         return [_update_event_from_row(row) for row in rows]
 
+    def put_lesson_signal(self, lesson: LessonsLearnedSignal) -> bool:
+        from psycopg.types.json import Jsonb
+
+        with self._connect() as conn:
+            self._ensure_schema(conn)
+            result = conn.execute(
+                """
+                INSERT INTO ranger_lesson_signals (
+                    lesson_id,
+                    payload,
+                    source_system,
+                    created_at_utc
+                )
+                VALUES (%s, %s, %s, now())
+                ON CONFLICT (lesson_id) DO NOTHING
+                """,
+                (
+                    lesson.lesson_id,
+                    Jsonb(lesson.model_dump(mode="json")),
+                    lesson.source_system,
+                ),
+            )
+        return result.rowcount > 0
+
+    def get_lesson_signal(self, lesson_id: str) -> LessonsLearnedSignal | None:
+        with self._connect() as conn:
+            self._ensure_schema(conn)
+            row = conn.execute(
+                "SELECT payload FROM ranger_lesson_signals WHERE lesson_id = %s",
+                (lesson_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return _lesson_signal_from_payload(row[0])
+
     def _connect(self) -> Any:
         import psycopg
 
@@ -605,6 +660,22 @@ class PostgresRunStore:
             ON ranger_update_ledger (entity_type, entity_id, created_at_utc)
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ranger_lesson_signals (
+                lesson_id text PRIMARY KEY,
+                payload jsonb NOT NULL,
+                source_system text NOT NULL,
+                created_at_utc timestamptz NOT NULL DEFAULT now()
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS ranger_lesson_signals_source_idx
+            ON ranger_lesson_signals (source_system, created_at_utc)
+            """
+        )
         self._schema_ready = True
 
 
@@ -618,6 +689,12 @@ def _record_from_payload(payload: Any) -> RunRecord:
     if isinstance(payload, str):
         return RunRecord.model_validate_json(payload)
     return RunRecord.model_validate(payload)
+
+
+def _lesson_signal_from_payload(payload: Any) -> LessonsLearnedSignal:
+    if isinstance(payload, str):
+        return LessonsLearnedSignal.model_validate_json(payload)
+    return LessonsLearnedSignal.model_validate(payload)
 
 
 def _record_mentions_soldier(record: RunRecord, soldier_id: str) -> bool:

@@ -45,23 +45,20 @@ should not write into `ranger_runs`, `ranger_audit_events`, or
 | `GET` | `/v1/entities/soldiers/{soldier_id}` | Frontend, System 2, System 3 | Fetch System 1's read-only projection for a soldier ID | runs, observations, recommendation records, and update refs tied to that soldier |
 | `GET` | `/v1/entities/missions/{mission_id}` | Frontend, System 2, System 3 | Fetch System 1's read-only projection for a mission ID | runs, soldier IDs, observations, recommendation records, and update refs tied to that mission |
 | `GET` | `/v1/soldiers/{soldier_id}/performance` | Soldier-facing app or frontend | Fetch self-service performance guidance | aggregate metrics, recent task ratings, and instructor-approved recommendations only |
+| `GET` | `/v1/soldier/{soldier_id}/training-trajectory` | System 2, frontend drilldowns | Fetch a read-only System 1 trajectory projection | task trends, development-edge counts, source refs, and update refs |
 | `GET` | `/v1/runs/{run_id}/audit` | Frontend, System 2, System 3 | Inspect lifecycle and decision events | immutable `AuditEvent[]` ordered by timestamp |
-| `POST` | `/v1/recommendations/{recommendation_id}/decision` | Frontend/instructor workflow | Approve or reject a recommendation | `ApprovalResponse` with final status |
+| `POST` | `/v1/recommendations/{recommendation_id}/decision` | Frontend/instructor workflow | Approve, edit-approve, or reject a recommendation | `ApprovalResponse` with final status |
 | `GET` | `/v1/outbox` | System 2, System 3, integration workers | Poll pending System 1 decision events | `OutboxEvent[]` |
-| `GET` | `/v1/update-ledger` | System 2, System 3, integration workers | Poll append-only System 1 observation and recommendation updates | `UpdateLedgerEntry[]` filtered by optional `entity_type` and `entity_id` |
+| `GET` | `/v1/update-ledger` | System 2, System 3, integration workers | Poll append-only System 1 observation, recommendation, and lesson-signal updates | `UpdateLedgerEntry[]` filtered by optional `entity_type` and `entity_id` |
 | `POST` | `/v1/outbox/{event_id}/published` | System 2, System 3, integration workers | Mark a consumed event as published | `event_id`, `status=published` |
+| `POST` | `/v1/lessons-learned` | System 3 | Record an idempotent lesson signal receipt | `LessonsLearnedReceipt` with `status=accepted` or `duplicate` |
 
 The frontend may call the decision endpoint by `recommendation_id` only. This
 service resolves the owning `run_id` from its run store.
 
-Future endpoints named in architecture but not implemented yet:
-
-- `GET /v1/soldier/{id}/training-trajectory`
-- `POST /v1/lessons-learned`
-
-Until those endpoints exist, System 2 and System 3 should exchange trajectory
-and lesson data through the shared stores and outbox/update-ledger pattern in
-this document.
+The trajectory endpoint is read-only and does not create a System 2 trajectory
+profile. The lessons endpoint records only a System 1 receipt/update reference;
+System 3 remains the source of truth for the lesson record itself.
 
 ## System 1 State Machine
 
@@ -170,6 +167,21 @@ recommendation drafts. It returns aggregate performance counts, recent task
 ratings, `pending_review_count`, `blocked_recommendation_count`, and only
 `approved_recommendations`.
 
+`SoldierTrainingTrajectory` is a System 2-facing projection. It returns:
+
+- `run_count`, `observation_count`, `approved_recommendation_count`
+- `go_rate` and `readiness_score`
+- task-level summaries with GO/NOGO/UNCERTAIN counts and simple trend labels
+- development-edge counts by recommendation status
+- recent observation points with source refs
+- `source_refs` and `update_refs` for downstream provenance checks
+
+`LessonsLearnedSignal` is accepted from System 3. It must include `lesson_id`,
+`summary`, and at least one canonical linkage: `mission_id`, `soldier_ids`,
+`task_codes`, or `recommendation_ids`. `POST /v1/lessons-learned` is
+idempotent on `lesson_id`; duplicate requests return `status=duplicate` and do
+not append another update ledger entry.
+
 `OutboxEvent.payload` currently contains:
 
 ```json
@@ -205,10 +217,10 @@ audit context by reading `GET /v1/runs/{run_id}` and
 | Field | Type | Meaning |
 |---|---|---|
 | `version_id` | string | Immutable update version ID |
-| `entity_type` | string | `observation` or `recommendation` for current System 1 writes |
+| `entity_type` | string | `observation`, `recommendation`, or `lesson_signal` for current System 1 writes |
 | `entity_id` | string | `observation_id` or `recommendation_id` |
-| `source_service` | string | Producing service, currently `system-1` |
-| `operation` | enum | `observe`, `approve`, `reject`, or future update operation |
+| `source_service` | string | Producing or source service, for example `system-1` or `system-3` |
+| `operation` | enum | `create`, `observe`, `approve`, `reject`, or future update operation |
 | `base_version_id` | string or null | Prior version when known |
 | `patch` | object | JSON patch/projection payload for the update |
 | `source_refs` | string array | Source locators used by the update |
@@ -249,11 +261,13 @@ inside the cluster.
 | Recommendation decision | Postgres `ranger_audit_events` | `recommendation_decision_recorded` | Appends an immutable approval/rejection audit event with actor and recommendation ID |
 | Recommendation decision | Postgres `ranger_outbox_events` | `recommendation.approved` or `recommendation.rejected` | Appends a pending integration event containing recommendation ID, decision status, and target soldier ID |
 | `POST /v1/outbox/{event_id}/published` | Postgres `ranger_outbox_events` | Outbox event `status` | Mutates only `status`, from `pending` to `published`, after a consumer confirms it applied the event |
+| `POST /v1/lessons-learned` | Postgres `ranger_lesson_signals` and `ranger_update_ledger` | Lesson signal receipt keyed by `lesson_id` | Inserts the receipt only once per `lesson_id`; first receipt appends a `lesson_signal` update with System 3 as `source_service`, duplicates return without another update |
 | Direct `PgVectorStore.upsert` adapter use | Postgres `ranger_vector_documents` with pgvector | Vector document keyed by `(namespace, document_id)` | Upserts retrievable text, metadata, and embedding; this adapter is implemented, but the ingest workflow does not yet call it automatically |
 
 System 1 does not delete shared records. It does not write System 2 trajectory
-profiles or System 3 lessons-learned records. It currently reads health from
-the configured infrastructure and writes only the records listed above.
+profiles or System 3 lessons-learned records. `ranger_lesson_signals` stores
+only System 1 receipt metadata and provenance so downstream consumers can tell
+that a System 3 lesson was seen.
 
 ## System 1 Current Tables And Keys
 
@@ -266,6 +280,7 @@ tables:
 | `ranger_audit_events` | `event_id` | Append-only | Run lifecycle and instructor decision events |
 | `ranger_outbox_events` | `event_id` | Append-only except `status` | Integration events for other systems to consume |
 | `ranger_update_ledger` | `version_id` | Append-only | Observation and recommendation update history with source refs and content hashes |
+| `ranger_lesson_signals` | `lesson_id` | Insert-only/idempotent | System 3 lesson-signal receipts used as System 1 integration context |
 | `ranger_vector_documents` | `(namespace, document_id)` | Upsert by namespace/document ID | Semantic documents and embeddings for pgvector retrieval |
 
 `ranger_runs.record` is the current materialized state. Other systems should

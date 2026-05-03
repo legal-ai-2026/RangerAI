@@ -3,8 +3,10 @@ from src.config import Settings
 from src.contracts import (
     AuditEvent,
     DevelopmentEdge,
+    EvidenceRef,
     GeoPoint,
     IngestEnvelope,
+    LessonsLearnedSignal,
     Observation,
     OutboxEvent,
     Phase,
@@ -142,3 +144,18 @@ def test_memory_store_tracks_audit_and_outbox_events() -> None:
     assert store.mark_outbox_event_published(outbox.event_id)
     assert store.list_pending_outbox_events() == []
     assert not store.mark_outbox_event_published("missing")
+
+
+def test_memory_store_records_lesson_signals_idempotently() -> None:
+    store = InMemoryRunStore()
+    lesson = LessonsLearnedSignal(
+        lesson_id="lesson-1",
+        mission_id="m-1",
+        summary="System 3 observed that post-contact reporting gaps affected follow-on planning.",
+        evidence_refs=[EvidenceRef(ref="system3://lessons/lesson-1", role="source_lesson")],
+    )
+
+    assert store.put_lesson_signal(lesson)
+    assert not store.put_lesson_signal(lesson)
+    assert store.get_lesson_signal("lesson-1") == lesson
+    assert store.get_lesson_signal("missing") is None

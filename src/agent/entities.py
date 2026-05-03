@@ -4,12 +4,14 @@ from typing import Literal
 
 from src.agent.store import RunStore
 from src.contracts import (
+    DevelopmentEdgeTrajectory,
     DevelopmentEdge,
     EntityObservation,
     EntityRecommendation,
     EntityRunReference,
     MissionEntityProjection,
     Observation,
+    Phase,
     PerformanceMetric,
     RecommendationRecord,
     RunRecord,
@@ -17,6 +19,9 @@ from src.contracts import (
     SoldierObservationDigest,
     SoldierPerformanceReport,
     SoldierRecommendationGuidance,
+    SoldierTrainingTrajectory,
+    TaskTrajectoryPoint,
+    TaskTrajectorySummary,
 )
 
 
@@ -142,6 +147,55 @@ def build_soldier_performance_report(
                 reverse=True,
             )[:10]
         ],
+    )
+
+
+def build_soldier_training_trajectory(
+    store: RunStore,
+    soldier_id: str,
+    limit: int = 100,
+) -> SoldierTrainingTrajectory | None:
+    runs = store.list_runs_for_soldier(soldier_id, limit=limit)
+    if not runs:
+        return None
+    observations = _entity_observations_for_soldier(runs, soldier_id)
+    recommendations = _entity_recommendations_for_soldier(runs, soldier_id)
+
+    go_count = sum(1 for item in observations if item.rating == "GO")
+    nogo_count = sum(1 for item in observations if item.rating == "NOGO")
+    uncertain_count = sum(1 for item in observations if item.rating == "UNCERTAIN")
+    total = len(observations)
+    go_rate = round(go_count / total, 2) if total else 0.0
+
+    return SoldierTrainingTrajectory(
+        soldier_id=soldier_id,
+        run_count=len(runs),
+        observation_count=total,
+        approved_recommendation_count=sum(
+            1 for item in recommendations if item.status == "approved"
+        ),
+        go_rate=go_rate,
+        readiness_score=_readiness_score(go_count, nogo_count, uncertain_count),
+        task_summaries=_task_trajectory_summaries(observations),
+        development_edges=_development_edge_trajectories(recommendations),
+        recent_points=[
+            TaskTrajectoryPoint(
+                run_id=item.run_id,
+                mission_id=item.mission_id,
+                phase=_phase_for_run(runs, item.run_id),
+                task_code=item.task_code,
+                rating=item.rating,
+                timestamp_utc=item.timestamp_utc,
+                source_ref=item.ref,
+            )
+            for item in sorted(
+                observations,
+                key=lambda item: item.timestamp_utc,
+                reverse=True,
+            )[:10]
+        ],
+        source_refs=[f"postgres://ranger_runs/{record.run_id}" for record in runs],
+        update_refs=_update_refs(store, observations, recommendations),
     )
 
 
@@ -310,3 +364,81 @@ def _metric_status(value: float) -> Literal["strong", "watch", "critical"]:
     if value >= 50:
         return "watch"
     return "critical"
+
+
+def _task_trajectory_summaries(
+    observations: list[EntityObservation],
+) -> list[TaskTrajectorySummary]:
+    by_task: dict[str, list[EntityObservation]] = {}
+    for observation in observations:
+        by_task.setdefault(observation.task_code, []).append(observation)
+
+    summaries: list[TaskTrajectorySummary] = []
+    for task_code, task_observations in by_task.items():
+        ordered = sorted(task_observations, key=lambda item: item.timestamp_utc)
+        latest = ordered[-1]
+        summaries.append(
+            TaskTrajectorySummary(
+                task_code=task_code,
+                go_count=sum(1 for item in ordered if item.rating == "GO"),
+                nogo_count=sum(1 for item in ordered if item.rating == "NOGO"),
+                uncertain_count=sum(1 for item in ordered if item.rating == "UNCERTAIN"),
+                latest_rating=latest.rating,
+                latest_timestamp_utc=latest.timestamp_utc,
+                trend=_task_trend(ordered),
+                source_refs=[item.ref for item in ordered],
+            )
+        )
+    return sorted(summaries, key=lambda item: item.task_code)
+
+
+def _development_edge_trajectories(
+    recommendations: list[EntityRecommendation],
+) -> list[DevelopmentEdgeTrajectory]:
+    by_edge: dict[DevelopmentEdge, list[EntityRecommendation]] = {}
+    for recommendation in recommendations:
+        by_edge.setdefault(recommendation.recommendation.development_edge, []).append(
+            recommendation
+        )
+
+    trajectories: list[DevelopmentEdgeTrajectory] = []
+    for edge, edge_recommendations in by_edge.items():
+        ordered = sorted(
+            edge_recommendations,
+            key=lambda item: item.recommendation.created_at_utc,
+        )
+        latest = ordered[-1]
+        trajectories.append(
+            DevelopmentEdgeTrajectory(
+                development_edge=edge,
+                approved_count=sum(1 for item in ordered if item.status == "approved"),
+                pending_count=sum(1 for item in ordered if item.status == "pending"),
+                rejected_count=sum(1 for item in ordered if item.status == "rejected"),
+                blocked_count=sum(1 for item in ordered if item.status == "blocked"),
+                latest_recommendation_id=latest.recommendation.recommendation_id,
+                source_refs=[item.ref for item in ordered],
+            )
+        )
+    return sorted(trajectories, key=lambda item: item.development_edge.value)
+
+
+def _task_trend(
+    observations: list[EntityObservation],
+) -> Literal["improving", "declining", "stable", "insufficient_data"]:
+    scored = [item for item in observations if item.rating in {"GO", "NOGO"}]
+    if len(scored) < 2:
+        return "insufficient_data"
+    first = scored[0].rating
+    latest = scored[-1].rating
+    if first == "NOGO" and latest == "GO":
+        return "improving"
+    if first == "GO" and latest == "NOGO":
+        return "declining"
+    return "stable"
+
+
+def _phase_for_run(runs: list[RunRecord], run_id: str) -> Phase:
+    for record in runs:
+        if record.run_id == run_id:
+            return record.ingest.phase
+    raise KeyError(f"run {run_id} not found")

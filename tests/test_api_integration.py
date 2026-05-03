@@ -12,7 +12,14 @@ from src.agent.store import InMemoryRunStore
 from src.agent.workflow import RangerWorkflow
 from src.api import main
 from src.config import Settings
-from src.contracts import GeoPoint, IngestEnvelope, Phase, RecommendationDecision
+from src.contracts import (
+    EvidenceRef,
+    GeoPoint,
+    IngestEnvelope,
+    LessonsLearnedSignal,
+    Phase,
+    RecommendationDecision,
+)
 from src.ingest.providers import heuristic_observations, heuristic_recommendations
 
 
@@ -153,6 +160,15 @@ def test_http_ingest_review_decision_and_soldier_performance_flow(monkeypatch) -
     assert "two-minute SITREP" in performance.approved_recommendations[0].proposed_modification
     assert not hasattr(performance.recent_observations[0], "note")
 
+    trajectory = main.get_soldier_training_trajectory("Jones")
+    assert trajectory.run_count == 1
+    assert trajectory.observation_count == 1
+    assert trajectory.approved_recommendation_count == 1
+    assert trajectory.task_summaries[0].task_code == "MV-2"
+    assert trajectory.task_summaries[0].trend == "insufficient_data"
+    assert trajectory.development_edges[0].approved_count == 1
+    assert f"postgres://ranger_runs/{run_id}" in trajectory.source_refs
+
     audit = main.get_run_audit(run_id)
     decision_event = next(
         event for event in audit if event.recommendation_id == decision.recommendation_id
@@ -165,6 +181,31 @@ def test_http_ingest_review_decision_and_soldier_performance_flow(monkeypatch) -
         entity_id=decision.recommendation_id,
     )
     assert "two-minute SITREP" in updates[0].patch["recommendation"]["proposed_modification"]
+
+    lesson = LessonsLearnedSignal(
+        lesson_id="lesson-1",
+        source_system="system-3",
+        mission_id="m-1",
+        soldier_ids=["Jones"],
+        task_codes=["MV-2"],
+        recommendation_ids=[decision.recommendation_id],
+        summary="System 3 observed that compressed post-contact reporting affected follow-on planning.",
+        evidence_refs=[EvidenceRef(ref="system3://lessons/lesson-1", role="source_lesson")],
+    )
+    receipt = main.record_lessons_learned(lesson)
+    duplicate = main.record_lessons_learned(lesson)
+    assert receipt.status == "accepted"
+    assert duplicate.status == "duplicate"
+    assert receipt.source_refs == duplicate.source_refs
+    assert f"postgres://ranger_lesson_signals/{lesson.lesson_id}" in receipt.source_refs
+    assert f"postgres://ranger_runs/{run_id}#record.recommendations" in receipt.source_refs
+    lesson_updates = main.store.list_update_events(
+        entity_type="lesson_signal",
+        entity_id=lesson.lesson_id,
+    )
+    assert len(lesson_updates) == 1
+    assert lesson_updates[0].source_service == "system-3"
+    assert lesson_updates[0].patch["lesson_id"] == "lesson-1"
 
 
 def test_configured_api_key_is_required_for_operational_v1_routes(monkeypatch) -> None:

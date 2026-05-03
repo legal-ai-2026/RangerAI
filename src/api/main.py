@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+import hashlib
+import json
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,6 +15,7 @@ from src.agent.entities import (
     build_mission_entity_projection,
     build_soldier_entity_projection,
     build_soldier_performance_report,
+    build_soldier_training_trajectory,
 )
 from src.agent.store import build_run_store
 from src.agent.vector_store import build_vector_store
@@ -23,6 +26,8 @@ from src.contracts import (
     AuditEvent,
     DashboardRunSummary,
     IngestEnvelope,
+    LessonsLearnedReceipt,
+    LessonsLearnedSignal,
     MissionEntityProjection,
     OutboxEvent,
     OutboxPublishResponse,
@@ -31,6 +36,7 @@ from src.contracts import (
     ScenarioRecommendation,
     SoldierEntityProjection,
     SoldierPerformanceReport,
+    SoldierTrainingTrajectory,
     UpdateLedgerEntry,
 )
 
@@ -165,6 +171,18 @@ def get_soldier_performance(
     return report
 
 
+@app.get("/v1/soldier/{soldier_id}/training-trajectory", response_model=SoldierTrainingTrajectory)
+def get_soldier_training_trajectory(
+    soldier_id: str,
+    limit: int = 100,
+) -> SoldierTrainingTrajectory:
+    _validate_lookup_limit(limit)
+    trajectory = build_soldier_training_trajectory(store, soldier_id, limit=limit)
+    if trajectory is None:
+        raise HTTPException(status_code=404, detail="soldier training trajectory not found")
+    return trajectory
+
+
 @app.get("/v1/runs/{run_id}/audit", response_model=list[AuditEvent])
 def get_run_audit(run_id: str) -> list[AuditEvent]:
     get_run(run_id)
@@ -194,6 +212,30 @@ def mark_outbox_event_published(event_id: str) -> OutboxPublishResponse:
     if not store.mark_outbox_event_published(event_id):
         raise HTTPException(status_code=404, detail="pending outbox event not found")
     return OutboxPublishResponse(event_id=event_id, status="published")
+
+
+@app.post("/v1/lessons-learned", response_model=LessonsLearnedReceipt, status_code=202)
+def record_lessons_learned(lesson: LessonsLearnedSignal) -> LessonsLearnedReceipt:
+    inserted = store.put_lesson_signal(lesson)
+    source_refs = _lesson_source_refs(lesson)
+    if inserted:
+        payload = lesson.model_dump(mode="json")
+        store.append_update_event(
+            UpdateLedgerEntry(
+                entity_type="lesson_signal",
+                entity_id=lesson.lesson_id,
+                source_service=lesson.source_system,
+                operation="create",
+                patch=payload,
+                source_refs=source_refs,
+                content_hash_after=_content_hash(payload),
+            )
+        )
+    return LessonsLearnedReceipt(
+        lesson_id=lesson.lesson_id,
+        status="accepted" if inserted else "duplicate",
+        source_refs=source_refs,
+    )
 
 
 def _approve_recommendation(
@@ -267,3 +309,27 @@ def _requires_api_key(request: Request) -> bool:
     if request.method == "OPTIONS":
         return False
     return request.url.path.startswith("/v1/") and request.url.path != "/v1/healthz"
+
+
+def _lesson_source_refs(lesson: LessonsLearnedSignal) -> list[str]:
+    refs = [f"postgres://ranger_lesson_signals/{lesson.lesson_id}"]
+    refs.extend(ref.ref for ref in lesson.evidence_refs)
+    refs.extend(
+        f"postgres://ranger_runs/{run_id}#record.recommendations"
+        for run_id in _run_ids_for_recommendations(lesson.recommendation_ids)
+    )
+    return sorted(set(refs))
+
+
+def _run_ids_for_recommendations(recommendation_ids: list[str]) -> list[str]:
+    run_ids: list[str] = []
+    for recommendation_id in recommendation_ids:
+        run_id = store.find_run_id_for_recommendation(recommendation_id)
+        if run_id is not None:
+            run_ids.append(run_id)
+    return run_ids
+
+
+def _content_hash(payload: dict[str, object]) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()

@@ -237,11 +237,13 @@ def test_api_exposes_only_versioned_operational_routes() -> None:
     assert "/v1/entities/soldiers/{soldier_id}" in paths
     assert "/v1/entities/missions/{mission_id}" in paths
     assert "/v1/soldiers/{soldier_id}/performance" in paths
+    assert "/v1/soldier/{soldier_id}/training-trajectory" in paths
     assert "/v1/runs/{run_id}/audit" in paths
     assert "/v1/recommendations/{recommendation_id}/decision" in paths
     assert "/v1/outbox" in paths
     assert "/v1/outbox/{event_id}/published" in paths
     assert "/v1/update-ledger" in paths
+    assert "/v1/lessons-learned" in paths
     assert "/ingest" not in paths
     assert "/runs/{run_id}" not in paths
     assert "/healthz" not in paths

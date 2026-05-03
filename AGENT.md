@@ -86,6 +86,6 @@ Add prompt regression tests under `tests/prompts/` before changing guardrails or
 
 ## Cross-System Reminders
 
-- Inbound from System 3: `POST /v1/lessons-learned` should be idempotent on `lesson_id` when implemented.
-- Outbound to System 2: `GET /v1/soldier/{id}/training-trajectory` is read-only when implemented.
+- Inbound from System 3: `POST /v1/lessons-learned` is idempotent on `lesson_id`.
+- Outbound to System 2: `GET /v1/soldier/{id}/training-trajectory` is read-only.
 - Canonical IDs are `soldier_id`, `patrol_id`, `mission_id`, and `platoon_id`. Do not mint local replacements.

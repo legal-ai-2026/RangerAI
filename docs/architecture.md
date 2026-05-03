@@ -145,9 +145,10 @@ Versioned paths are canonical:
 | `GET` | `/v1/soldiers/{soldier_id}/performance` | Soldier-facing performance metrics and approved recommendations |
 | `POST` | `/v1/recommendations/{id}/decision` | Instructor approve/reject/edit decision |
 | `GET` | `/v1/outbox` | Poll pending integration events |
+| `GET` | `/v1/update-ledger` | Poll append-only observation, recommendation, and lesson-signal updates |
 | `POST` | `/v1/outbox/{event_id}/published` | Mark an integration event as published |
-| `GET` | `/v1/soldier/{id}/training-trajectory` | Future read-only endpoint for System 2 |
-| `POST` | `/v1/lessons-learned` | Future idempotent webhook from System 3 |
+| `GET` | `/v1/soldier/{id}/training-trajectory` | Read-only System 1 training trajectory projection for System 2 |
+| `POST` | `/v1/lessons-learned` | Idempotent System 3 lesson-signal receipt keyed by `lesson_id` |
 | `GET` | `/v1/healthz` | Dependency and configuration health |
 
 ## Tech Stack

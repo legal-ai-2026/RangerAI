@@ -333,6 +333,85 @@ class SoldierPerformanceReport(StrictModel):
     recent_observations: list[SoldierObservationDigest] = Field(default_factory=list)
 
 
+class TaskTrajectoryPoint(StrictModel):
+    run_id: str
+    mission_id: str
+    phase: Phase
+    task_code: str
+    rating: Literal["GO", "NOGO", "UNCERTAIN"]
+    timestamp_utc: datetime
+    source_ref: str
+
+
+class TaskTrajectorySummary(StrictModel):
+    task_code: str
+    go_count: int
+    nogo_count: int
+    uncertain_count: int
+    latest_rating: Literal["GO", "NOGO", "UNCERTAIN"]
+    latest_timestamp_utc: datetime
+    trend: Literal["improving", "declining", "stable", "insufficient_data"]
+    source_refs: list[str] = Field(default_factory=list)
+
+
+class DevelopmentEdgeTrajectory(StrictModel):
+    development_edge: DevelopmentEdge
+    approved_count: int = 0
+    pending_count: int = 0
+    rejected_count: int = 0
+    blocked_count: int = 0
+    latest_recommendation_id: str | None = None
+    source_refs: list[str] = Field(default_factory=list)
+
+
+class SoldierTrainingTrajectory(StrictModel):
+    soldier_id: str
+    generated_at_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    run_count: int
+    observation_count: int
+    approved_recommendation_count: int
+    go_rate: float = Field(ge=0, le=1)
+    readiness_score: float = Field(ge=0, le=100)
+    task_summaries: list[TaskTrajectorySummary] = Field(default_factory=list)
+    development_edges: list[DevelopmentEdgeTrajectory] = Field(default_factory=list)
+    recent_points: list[TaskTrajectoryPoint] = Field(default_factory=list)
+    source_refs: list[str] = Field(default_factory=list)
+    update_refs: list[str] = Field(default_factory=list)
+
+
+class LessonsLearnedSignal(StrictModel):
+    lesson_id: str = Field(min_length=1)
+    source_system: str = Field(default="system-3", min_length=1)
+    mission_id: str | None = None
+    soldier_ids: list[str] = Field(default_factory=list)
+    task_codes: list[str] = Field(default_factory=list)
+    recommendation_ids: list[str] = Field(default_factory=list)
+    summary: str = Field(min_length=20, max_length=2000)
+    evidence_refs: list[EvidenceRef] = Field(default_factory=list)
+    occurred_at_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator("occurred_at_utc")
+    @classmethod
+    def require_occurred_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("occurred_at_utc must include timezone information")
+        return value.astimezone(timezone.utc)
+
+    @model_validator(mode="after")
+    def require_canonical_linkage(self) -> "LessonsLearnedSignal":
+        if not (self.mission_id or self.soldier_ids or self.task_codes or self.recommendation_ids):
+            raise ValueError(
+                "lesson must reference at least one mission, soldier, task, or recommendation"
+            )
+        return self
+
+
+class LessonsLearnedReceipt(StrictModel):
+    lesson_id: str
+    status: Literal["accepted", "duplicate"]
+    source_refs: list[str] = Field(default_factory=list)
+
+
 class AuditEvent(StrictModel):
     event_id: str = Field(default_factory=lambda: str(uuid4()))
     run_id: str

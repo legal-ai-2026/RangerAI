@@ -207,7 +207,26 @@ Recommended soldier view:
 - Approved development guidance.
 - A small "pending instructor review" count when applicable.
 
-### 5. Cross-System Entity Views
+### 5. Training Trajectory Projection
+
+Use this for System 2 drilldowns or an instructor-facing longitudinal view. It
+is read-only and does not create or modify a System 2 trajectory profile.
+
+```text
+GET /v1/soldier/{soldier_id}/training-trajectory?limit=100
+```
+
+It exposes:
+
+- run and observation counts
+- `go_rate` and `readiness_score`
+- task-level GO/NOGO/UNCERTAIN summaries
+- simple task trend labels
+- development-edge counts by recommendation status
+- recent observation points with source refs
+- update refs for drift or stale-state checks
+
+### 6. Cross-System Entity Views
 
 Use these when the frontend has only a canonical ID and needs to show what
 System 1 knows about it.
@@ -675,6 +694,7 @@ Panels:
 - Blocked recommendations cannot be approved in UI.
 - Soldier-facing views use `/v1/soldiers/{soldier_id}/performance`.
 - Cross-app drilldowns use entity projection endpoints.
+- System 2 drilldowns can use `/v1/soldier/{soldier_id}/training-trajectory`.
 - Raw audio/image payloads are not persisted in frontend state after upload.
 - Errors `404`, `409`, and `422` have explicit UI states.
 - The deployment path provides authentication and network protection before
