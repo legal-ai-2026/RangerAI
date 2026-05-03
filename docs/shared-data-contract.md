@@ -39,15 +39,20 @@ should not write into `ranger_runs`, `ranger_audit_events`, or
 | Method | Path | Caller | Purpose | Important response data |
 |---|---|---|---|---|
 | `GET` | `/v1/healthz` | Frontend, operators, other services | Check app, provider, and infra availability | `dependencies_available`, `providers_configured`, configured OpenAI model names |
+| `GET` | `/v1/readyz` | Frontend, operators, other services | Check critical runtime readiness | critical dependency status and provider/model configuration |
 | `POST` | `/v1/ingest` | Frontend or instructor workflow | Start a new processing run | `run_id`, initial `status=accepted`, original `ingest` |
 | `GET` | `/v1/runs/{run_id}` | Frontend, System 2, System 3 | Fetch canonical System 1 run state | `observations`, `recommendations`, `kg_write_summary`, `errors` |
 | `GET` | `/v1/dashboard/runs/{run_id}` | Frontend | Fetch presentation-neutral summary | per-soldier GO/NOGO counts, readiness score, active recommendations |
+| `GET` | `/v1/missions/{mission_id}/state` | Frontend | Fetch compact mission-command projection | latest run, platoon, phase, readiness, observations, recommendation counts, source refs |
 | `GET` | `/v1/entities/soldiers/{soldier_id}` | Frontend, System 2, System 3 | Fetch System 1's read-only projection for a soldier ID | runs, observations, recommendation records, and update refs tied to that soldier |
 | `GET` | `/v1/entities/missions/{mission_id}` | Frontend, System 2, System 3 | Fetch System 1's read-only projection for a mission ID | runs, soldier IDs, observations, recommendation records, and update refs tied to that mission |
 | `GET` | `/v1/soldiers/{soldier_id}/performance` | Soldier-facing app or frontend | Fetch self-service performance guidance | aggregate metrics, recent task ratings, and instructor-approved recommendations only |
 | `GET` | `/v1/soldier/{soldier_id}/training-trajectory` | System 2, frontend drilldowns | Fetch a read-only System 1 trajectory projection | task trends, development-edge counts, source refs, and update refs |
 | `GET` | `/v1/runs/{run_id}/audit` | Frontend, System 2, System 3 | Inspect lifecycle and decision events | immutable `AuditEvent[]` ordered by timestamp |
+| `GET` | `/v1/recommendations/recent` | Frontend | Fetch recent recommendation queue | `EntityRecommendation[]`, optionally filtered by `mission_id` or `status` |
+| `GET` | `/v1/recommendations/{recommendation_id}` | Frontend, System 2, System 3 | Fetch one recommendation with run/policy context | `EntityRecommendation` |
 | `POST` | `/v1/recommendations/{recommendation_id}/decision` | Frontend/instructor workflow | Approve, edit-approve, or reject a recommendation | `ApprovalResponse` with final status |
+| `GET` | `/v1/graph/subgraph` | Frontend, System 2, System 3 | Fetch a relationship projection around run, mission, soldier, or recent state | `GraphSubgraph` nodes and edges with source refs |
 | `GET` | `/v1/outbox` | System 2, System 3, integration workers | Poll pending System 1 decision events | `OutboxEvent[]` |
 | `GET` | `/v1/update-ledger` | System 2, System 3, integration workers | Poll append-only System 1 observation, recommendation, and lesson-signal updates | `UpdateLedgerEntry[]` filtered by optional `entity_type` and `entity_id` |
 | `POST` | `/v1/outbox/{event_id}/published` | System 2, System 3, integration workers | Mark a consumed event as published | `event_id`, `status=published` |

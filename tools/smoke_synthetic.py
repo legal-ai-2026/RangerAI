@@ -34,6 +34,7 @@ def main() -> int:
     )
 
     health = client.request("GET", "/v1/healthz")
+    ready = client.request("GET", "/v1/readyz")
     accepted = client.request("POST", "/v1/ingest", _synthetic_ingest())
     run_id = str(accepted["run_id"])
     run = client.poll_run(run_id)
@@ -43,11 +44,14 @@ def main() -> int:
     recommendation_id = pending["recommendation"]["recommendation_id"]
 
     dashboard = client.request("GET", f"/v1/dashboard/runs/{run_id}")
+    mission_state = client.request("GET", "/v1/missions/m-smoke/state")
     decision = client.request(
         "POST",
         f"/v1/recommendations/{recommendation_id}/decision",
         {"decision": "approve"},
     )
+    recommendation_detail = client.request("GET", f"/v1/recommendations/{recommendation_id}")
+    graph = client.request("GET", "/v1/graph/subgraph?mission_id=m-smoke")
     performance = client.request("GET", "/v1/soldiers/Jones/performance")
     trajectory = client.request("GET", "/v1/soldier/Jones/training-trajectory")
     lesson = client.request("POST", "/v1/lessons-learned", _synthetic_lesson(recommendation_id))
@@ -64,10 +68,15 @@ def main() -> int:
             {
                 "ok": True,
                 "health_ok": health["ok"],
+                "ready_ok": ready["ok"],
                 "run_id": run_id,
                 "run_status": client.request("GET", f"/v1/runs/{run_id}")["status"],
                 "dashboard_pending_before_approval": dashboard["pending_recommendations"],
+                "mission_state_observations": mission_state["total_observations"],
                 "decision": decision["status"],
+                "recommendation_detail_status": recommendation_detail["status"],
+                "graph_nodes": len(graph["nodes"]),
+                "graph_edges": len(graph["edges"]),
                 "approved_recommendations": len(performance["approved_recommendations"]),
                 "trajectory_runs": trajectory["run_count"],
                 "lesson_status": lesson["status"],

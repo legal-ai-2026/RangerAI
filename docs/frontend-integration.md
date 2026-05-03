@@ -50,11 +50,14 @@ Useful discovery endpoints:
 GET /docs
 GET /openapi.json
 GET /v1/healthz
+GET /v1/readyz
 ```
 
 `/v1/healthz` reports whether provider keys and infrastructure adapters are
 configured. The response is safe to show in an operator view; it does not print
 secrets.
+`/v1/readyz` reports critical runtime readiness and returns the same model
+configuration summary without exposing keys.
 
 If `SYSTEM1_API_KEY` is configured, include it on operational requests:
 
@@ -76,8 +79,8 @@ Current backend status:
 
 - No frontend code is hosted by this repository.
 - Optional API-key middleware is available. Set `SYSTEM1_API_KEY` and send
-  `X-API-Key` on operational `/v1` requests. `/v1/healthz` remains unauthenticated
-  for readiness checks.
+  `X-API-Key` on operational `/v1` requests. `/v1/healthz` and `/v1/readyz`
+  remain unauthenticated for readiness checks.
 - Optional CORS allowlisting is available. Set `CORS_ALLOW_ORIGINS` to a
   comma-separated list such as `http://localhost:3000,https://frontend.example`.
 - Do not expose the API directly on a public network. Put it behind the
@@ -96,6 +99,14 @@ poll GET /v1/runs/{run_id}
   -> accepted | processing | pending_approval | completed | failed
 GET /v1/dashboard/runs/{run_id}
   -> platoon and per-soldier dashboard projection
+GET /v1/missions/{mission_id}/state
+  -> compact mission-command projection
+GET /v1/recommendations/recent?mission_id={mission_id}
+  -> recommendation queue / recent cards
+GET /v1/recommendations/{recommendation_id}
+  -> one recommendation with policy and run context
+GET /v1/graph/subgraph?mission_id={mission_id}
+  -> graph projection for drilldowns
 POST /v1/recommendations/{recommendation_id}/decision
   -> approve or reject each pending recommendation
 GET /v1/runs/{run_id}/audit
@@ -677,6 +688,9 @@ Panels:
 
    ```text
    GET http://127.0.0.1:8001/v1/dashboard/runs/{run_id}
+   GET http://127.0.0.1:8001/v1/missions/{mission_id}/state
+   GET http://127.0.0.1:8001/v1/recommendations/recent?mission_id={mission_id}
+   GET http://127.0.0.1:8001/v1/graph/subgraph?mission_id={mission_id}
    ```
 
 6. Approve or reject each pending recommendation:
@@ -706,6 +720,10 @@ Panels:
 - Pending recommendation cards show score breakdown, policy reasons, evidence,
   doctrine refs, and safety checks.
 - Approve/reject calls use `recommendation_id`.
+- Recommendation details use `GET /v1/recommendations/{recommendation_id}`
+  before opening a full evidence drawer.
+- Mission views use `/v1/missions/{mission_id}/state` for compact summary and
+  `/v1/graph/subgraph` for relationship drilldowns.
 - Edited approvals send a full `edited_recommendation` with the same
   `recommendation_id`.
 - Blocked recommendations cannot be approved in UI.

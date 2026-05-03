@@ -319,17 +319,33 @@ def test_entity_and_soldier_performance_endpoints_project_existing_records() -> 
 
         soldier = main.get_soldier_entity("Jones")
         mission = main.get_mission_entity("m-1")
+        mission_state = main.get_mission_state("m-1")
         performance = main.get_soldier_performance("Jones")
+        recommendation_detail = main.get_recommendation(
+            jones_recommendation.recommendation.recommendation_id
+        )
+        recent = main.list_recent_recommendations(mission_id="m-1")
+        subgraph = main.get_graph_subgraph(mission_id="m-1")
 
         assert soldier.soldier_id == "Jones"
         assert soldier.observations[0].note
         assert soldier.update_refs
         assert mission.mission_id == "m-1"
         assert mission.soldier_ids == ["Garcia", "Jones", "Smith"]
+        assert mission_state.mission_id == "m-1"
+        assert mission_state.total_observations == 3
+        assert mission_state.approved_recommendations == 1
         assert len(performance.approved_recommendations) == 1
         assert performance.pending_review_count == 0
         assert performance.recent_observations
         assert not hasattr(performance.recent_observations[0], "note")
+        assert recommendation_detail.status == "approved"
+        assert recommendation_detail.run_id == completed.run_id
+        assert any(item.status == "approved" for item in recent)
+        assert {node.kind for node in subgraph.nodes}.issuperset(
+            {"Mission", "Platoon", "Soldier", "Observation", "Recommendation"}
+        )
+        assert any(edge.label == "DERIVED_FROM" for edge in subgraph.edges)
     finally:
         main.store = previous_store
         main.workflow = previous_workflow
@@ -429,13 +445,18 @@ def test_v1_decision_rejects_instructor_edit_that_fails_policy() -> None:
 def test_api_exposes_only_versioned_operational_routes() -> None:
     paths = {route.path for route in main.app.routes}
     assert "/v1/ingest" in paths
+    assert "/v1/readyz" in paths
     assert "/v1/runs/{run_id}" in paths
+    assert "/v1/missions/{mission_id}/state" in paths
     assert "/v1/entities/soldiers/{soldier_id}" in paths
     assert "/v1/entities/missions/{mission_id}" in paths
     assert "/v1/soldiers/{soldier_id}/performance" in paths
     assert "/v1/soldier/{soldier_id}/training-trajectory" in paths
     assert "/v1/runs/{run_id}/audit" in paths
+    assert "/v1/recommendations/recent" in paths
+    assert "/v1/recommendations/{recommendation_id}" in paths
     assert "/v1/recommendations/{recommendation_id}/decision" in paths
+    assert "/v1/graph/subgraph" in paths
     assert "/v1/outbox" in paths
     assert "/v1/outbox/{event_id}/published" in paths
     assert "/v1/update-ledger" in paths

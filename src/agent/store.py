@@ -24,6 +24,8 @@ class RunStore(Protocol):
 
     def list_runs_for_mission(self, mission_id: str, limit: int = 100) -> list[RunRecord]: ...
 
+    def list_recent_runs(self, limit: int = 100) -> list[RunRecord]: ...
+
     def health(self) -> bool: ...
 
     def append_audit_event(self, event: AuditEvent) -> None: ...
@@ -86,6 +88,15 @@ class InMemoryRunStore:
             record for record in self.records.values() if record.ingest.mission_id == mission_id
         ]
         return sorted(matches, key=lambda record: record.ingest.timestamp_utc, reverse=True)[:limit]
+
+    def list_recent_runs(self, limit: int = 100) -> list[RunRecord]:
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+        return sorted(
+            self.records.values(),
+            key=lambda record: record.ingest.timestamp_utc,
+            reverse=True,
+        )[:limit]
 
     def health(self) -> bool:
         return True
@@ -277,6 +288,22 @@ class PostgresRunStore:
                 LIMIT %s
                 """,
                 (Jsonb(query), limit),
+            ).fetchall()
+        return [_record_from_payload(row[0]) for row in rows]
+
+    def list_recent_runs(self, limit: int = 100) -> list[RunRecord]:
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+        with self._connect() as conn:
+            self._ensure_schema(conn)
+            rows = conn.execute(
+                """
+                SELECT record
+                FROM ranger_runs
+                ORDER BY updated_at DESC
+                LIMIT %s
+                """,
+                (limit,),
             ).fetchall()
         return [_record_from_payload(row[0]) for row in rows]
 

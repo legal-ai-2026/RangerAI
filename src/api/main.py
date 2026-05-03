@@ -13,10 +13,14 @@ from starlette.responses import Response
 from src.agent.cache import redis_health
 from src.agent.dashboard import build_dashboard_summary
 from src.agent.entities import (
+    build_graph_subgraph,
     build_mission_entity_projection,
+    build_mission_state_summary,
     build_soldier_entity_projection,
     build_soldier_performance_report,
     build_soldier_training_trajectory,
+    get_recommendation_entity,
+    list_recent_recommendation_entities,
 )
 from src.agent.store import build_run_store
 from src.agent.vector_store import build_vector_store
@@ -26,13 +30,18 @@ from src.contracts import (
     ApprovalResponse,
     AuditEvent,
     DashboardRunSummary,
+    DependencyStatus,
+    EntityRecommendation,
+    GraphSubgraph,
     IngestEnvelope,
     LessonsLearnedReceipt,
     LessonsLearnedSignal,
+    MissionStateSummary,
     MissionEntityProjection,
     OutboxEvent,
     OutboxPublishResponse,
     RecommendationDecision,
+    ReadinessReport,
     RunRecord,
     ScenarioRecommendation,
     SoldierEntityProjection,
@@ -96,13 +105,7 @@ async def require_api_key(
 
 @app.get("/v1/healthz")
 def healthz() -> dict[str, object]:
-    providers = {
-        "anthropic": bool(settings.anthropic_api_key),
-        "openai": bool(settings.openai_api_key),
-        "deepgram": bool(settings.deepgram_api_key),
-        "mistral": bool(settings.mistral_api_key),
-        "openweather": bool(settings.openweather_api_key),
-    }
+    providers = _provider_status()
     falkordb_available = workflow.kg.health()
     return {
         "ok": True,
@@ -128,6 +131,14 @@ def healthz() -> dict[str, object]:
     }
 
 
+@app.get("/v1/readyz", response_model=ReadinessReport)
+def readyz(response: Response) -> ReadinessReport:
+    report = _readiness_report()
+    if not report.ok:
+        response.status_code = 503
+    return report
+
+
 @app.post("/v1/ingest", response_model=RunRecord, status_code=202)
 async def ingest(
     envelope: IngestEnvelope,
@@ -151,6 +162,18 @@ def get_run(run_id: str) -> RunRecord:
 @app.get("/v1/dashboard/runs/{run_id}", response_model=DashboardRunSummary)
 def get_dashboard_run(run_id: str) -> DashboardRunSummary:
     return build_dashboard_summary(get_run(run_id))
+
+
+@app.get("/v1/missions/{mission_id}/state", response_model=MissionStateSummary)
+def get_mission_state(
+    mission_id: str,
+    limit: int = 100,
+) -> MissionStateSummary:
+    _validate_lookup_limit(limit)
+    summary = build_mission_state_summary(store, mission_id, limit=limit)
+    if summary is None:
+        raise HTTPException(status_code=404, detail="mission state not found")
+    return summary
 
 
 @app.get("/v1/entities/soldiers/{soldier_id}", response_model=SoldierEntityProjection)
@@ -205,6 +228,51 @@ def get_soldier_training_trajectory(
 def get_run_audit(run_id: str) -> list[AuditEvent]:
     get_run(run_id)
     return store.list_audit_events(run_id)
+
+
+@app.get("/v1/recommendations/recent", response_model=list[EntityRecommendation])
+def list_recent_recommendations(
+    mission_id: str | None = None,
+    status: str | None = None,
+    limit: int = 25,
+) -> list[EntityRecommendation]:
+    _validate_lookup_limit(limit)
+    if status is not None and status not in {"pending", "approved", "rejected", "blocked"}:
+        raise HTTPException(status_code=422, detail="status is not a recommendation status")
+    return list_recent_recommendation_entities(
+        store,
+        mission_id=mission_id,
+        status=status,
+        limit=limit,
+    )
+
+
+@app.get("/v1/recommendations/{recommendation_id}", response_model=EntityRecommendation)
+def get_recommendation(recommendation_id: str) -> EntityRecommendation:
+    recommendation = get_recommendation_entity(store, recommendation_id)
+    if recommendation is None:
+        raise HTTPException(status_code=404, detail="recommendation not found")
+    return recommendation
+
+
+@app.get("/v1/graph/subgraph", response_model=GraphSubgraph)
+def get_graph_subgraph(
+    run_id: str | None = None,
+    mission_id: str | None = None,
+    soldier_id: str | None = None,
+    limit: int = 100,
+) -> GraphSubgraph:
+    _validate_lookup_limit(limit)
+    subgraph = build_graph_subgraph(
+        store,
+        run_id=run_id,
+        mission_id=mission_id,
+        soldier_id=soldier_id,
+        limit=limit,
+    )
+    if subgraph is None:
+        raise HTTPException(status_code=404, detail="graph subgraph not found")
+    return subgraph
 
 
 @app.get("/v1/outbox", response_model=list[OutboxEvent])
@@ -349,7 +417,10 @@ def _requires_api_key(request: Request) -> bool:
         return False
     if request.method == "OPTIONS":
         return False
-    return request.url.path.startswith("/v1/") and request.url.path != "/v1/healthz"
+    return request.url.path.startswith("/v1/") and request.url.path not in {
+        "/v1/healthz",
+        "/v1/readyz",
+    }
 
 
 def _trace_id(request: Request) -> str:
@@ -359,6 +430,39 @@ def _trace_id(request: Request) -> str:
     trace_id = request.headers.get("x-trace-id") or str(uuid4())
     request.state.trace_id = trace_id
     return trace_id
+
+
+def _provider_status() -> dict[str, bool]:
+    return {
+        "anthropic": bool(settings.anthropic_api_key),
+        "openai": bool(settings.openai_api_key),
+        "deepgram": bool(settings.deepgram_api_key),
+        "mistral": bool(settings.mistral_api_key),
+        "openweather": bool(settings.openweather_api_key),
+    }
+
+
+def _readiness_report() -> ReadinessReport:
+    dependencies = [
+        DependencyStatus(name="run_store", ok=store.health(), critical=True),
+        DependencyStatus(
+            name="pgvector",
+            ok=vector_store.health() if vector_store is not None else False,
+            critical=False,
+        ),
+        DependencyStatus(name="redis", ok=redis_health(settings.redis_url), critical=False),
+        DependencyStatus(name="falkordb", ok=workflow.kg.health(), critical=True),
+        DependencyStatus(name="langgraph", ok=compile_langgraph_probe(), critical=True),
+    ]
+    return ReadinessReport(
+        ok=all(item.ok for item in dependencies if item.critical),
+        dependencies=dependencies,
+        providers_configured=_provider_status(),
+        openai_models={
+            "stt": settings.openai_stt_model,
+            "multimodal": settings.openai_multimodal_model,
+        },
+    )
 
 
 def _lesson_source_refs(lesson: LessonsLearnedSignal) -> list[str]:

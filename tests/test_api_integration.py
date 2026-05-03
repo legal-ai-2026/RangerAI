@@ -240,6 +240,8 @@ def test_configured_api_key_is_required_for_operational_v1_routes(monkeypatch) -
 
     health = asyncio.run(main.require_api_key(_request("/v1/healthz"), call_next))
     assert health.status_code == 209
+    ready = asyncio.run(main.require_api_key(_request("/v1/readyz"), call_next))
+    assert ready.status_code == 209
 
     missing = asyncio.run(main.require_api_key(_request("/v1/runs/missing"), call_next))
     assert missing.status_code == 401

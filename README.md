@@ -138,16 +138,21 @@ make smoke
 - `GET /v1/runs/{run_id}` returns transcript, OCR pages, observations, KG write summary, recommendation records, and errors.
 - `GET /v1/runs/{run_id}/audit` returns durable run lifecycle and recommendation decision events.
 - `GET /v1/dashboard/runs/{run_id}` returns frontend-ready platoon and soldier performance metrics plus active recommendations.
+- `GET /v1/missions/{mission_id}/state` returns a compact mission-command state projection.
 - `GET /v1/entities/soldiers/{soldier_id}` returns System 1's read-only projection for a soldier ID.
 - `GET /v1/entities/missions/{mission_id}` returns System 1's read-only projection for a mission ID.
 - `GET /v1/soldiers/{soldier_id}/performance` returns soldier-facing performance metrics and instructor-approved recommendations.
 - `GET /v1/soldier/{soldier_id}/training-trajectory` returns a System 2-facing read-only training trajectory projection.
+- `GET /v1/recommendations/recent` returns recent recommendation records, optionally filtered by mission or status.
+- `GET /v1/recommendations/{recommendation_id}` returns one recommendation with run, mission, policy, and status context.
 - `POST /v1/recommendations/{recommendation_id}/decision` records instructor approval, edited approval, or rejection.
+- `GET /v1/graph/subgraph` returns a frontend-ready graph projection around a run, mission, soldier, or recent state.
 - `GET /v1/outbox` returns pending integration events for external workers.
 - `GET /v1/update-ledger` returns append-only observation, recommendation, and lesson-signal update records.
 - `POST /v1/outbox/{event_id}/published` marks an outbox event as published.
 - `POST /v1/lessons-learned` records an idempotent System 3 lesson signal receipt keyed by `lesson_id`.
 - `GET /v1/healthz` reports configured providers, FalkorDB health, and LangGraph importability.
+- `GET /v1/readyz` reports critical dependency readiness for the running API.
 
 Operational routes accept an optional `X-Trace-Id` request header. When omitted,
 the API generates one and echoes it back as `X-Trace-Id`; run records, audit

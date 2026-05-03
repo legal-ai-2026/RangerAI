@@ -18,6 +18,17 @@ class Phase(str, Enum):
     florida = "Florida"
 
 
+class MissionType(str, Enum):
+    planning = "Planning"
+    movement = "Movement"
+    recon = "Recon"
+    ambush = "Ambush"
+    raid = "Raid"
+    patrol_base = "PatrolBase"
+    aar = "AAR"
+    other = "Other"
+
+
 class DevelopmentEdge(str, Enum):
     leadership_under_fatigue = "leadership_under_fatigue"
     communications = "communications"
@@ -65,11 +76,14 @@ class IngestEnvelope(StrictModel):
     platoon_id: str = Field(min_length=1)
     mission_id: str = Field(min_length=1)
     phase: Phase
+    mission_type: MissionType = MissionType.other
     timestamp_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     geo: GeoPoint
     audio_b64: str | None = None
     image_b64: list[str] = Field(default_factory=list)
     free_text: str | None = Field(default=None, max_length=20_000)
+    frontend_build: str | None = Field(default=None, max_length=120)
+    roster_version: str | None = Field(default=None, max_length=120)
 
     @field_validator("timestamp_utc")
     @classmethod
@@ -239,6 +253,28 @@ class DashboardRunSummary(StrictModel):
     soldiers: list[SoldierPerformanceSummary] = Field(default_factory=list)
 
 
+class MissionStateSummary(StrictModel):
+    mission_id: str
+    generated_at_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    latest_run_id: str | None = None
+    platoon_id: str | None = None
+    phase: Phase | None = None
+    mission_type: MissionType | None = None
+    status: RunStatus | None = None
+    run_count: int
+    soldier_ids: list[str] = Field(default_factory=list)
+    total_observations: int
+    pending_recommendations: int
+    approved_recommendations: int
+    rejected_recommendations: int
+    blocked_recommendations: int
+    platoon_readiness_score: float = Field(ge=0, le=100)
+    development_edges: list[DevelopmentEdge] = Field(default_factory=list)
+    latest_observation_refs: list[str] = Field(default_factory=list)
+    latest_recommendation_refs: list[str] = Field(default_factory=list)
+    source_refs: list[str] = Field(default_factory=list)
+
+
 class EntityRunReference(StrictModel):
     run_id: str
     mission_id: str
@@ -290,6 +326,43 @@ class MissionEntityProjection(StrictModel):
     observations: list[EntityObservation] = Field(default_factory=list)
     recommendations: list[EntityRecommendation] = Field(default_factory=list)
     update_refs: list[str] = Field(default_factory=list)
+
+
+class GraphNode(StrictModel):
+    node_id: str
+    label: str
+    kind: str
+    properties: dict[str, object] = Field(default_factory=dict)
+    ref: str | None = None
+
+
+class GraphEdge(StrictModel):
+    edge_id: str
+    source_id: str
+    target_id: str
+    label: str
+    properties: dict[str, object] = Field(default_factory=dict)
+
+
+class GraphSubgraph(StrictModel):
+    generated_at_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    scope: dict[str, str] = Field(default_factory=dict)
+    nodes: list[GraphNode] = Field(default_factory=list)
+    edges: list[GraphEdge] = Field(default_factory=list)
+    source_refs: list[str] = Field(default_factory=list)
+
+
+class DependencyStatus(StrictModel):
+    name: str
+    ok: bool
+    critical: bool = True
+
+
+class ReadinessReport(StrictModel):
+    ok: bool
+    dependencies: list[DependencyStatus] = Field(default_factory=list)
+    providers_configured: dict[str, bool] = Field(default_factory=dict)
+    openai_models: dict[str, str] = Field(default_factory=dict)
 
 
 class SoldierObservationDigest(StrictModel):

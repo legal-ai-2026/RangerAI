@@ -9,6 +9,10 @@ from src.contracts import (
     EntityObservation,
     EntityRecommendation,
     EntityRunReference,
+    GraphEdge,
+    GraphNode,
+    GraphSubgraph,
+    MissionStateSummary,
     MissionEntityProjection,
     Observation,
     Phase,
@@ -199,6 +203,312 @@ def build_soldier_training_trajectory(
     )
 
 
+def get_recommendation_entity(
+    store: RunStore,
+    recommendation_id: str,
+) -> EntityRecommendation | None:
+    run_id = store.find_run_id_for_recommendation(recommendation_id)
+    if run_id is None:
+        return None
+    record = store.get(run_id)
+    if record is None:
+        return None
+    for index, recommendation in enumerate(record.recommendations):
+        if recommendation.recommendation.recommendation_id == recommendation_id:
+            return _entity_recommendation(record, recommendation, index)
+    return None
+
+
+def list_recent_recommendation_entities(
+    store: RunStore,
+    mission_id: str | None = None,
+    status: str | None = None,
+    limit: int = 100,
+) -> list[EntityRecommendation]:
+    runs = (
+        store.list_runs_for_mission(mission_id, limit=max(limit, 100))
+        if mission_id
+        else store.list_recent_runs(limit=max(limit, 100))
+    )
+    recommendations = [
+        _entity_recommendation(record, recommendation, index)
+        for record in runs
+        for index, recommendation in enumerate(record.recommendations)
+        if status is None or recommendation.status == status
+    ]
+    return sorted(
+        recommendations,
+        key=lambda item: item.recommendation.created_at_utc,
+        reverse=True,
+    )[:limit]
+
+
+def build_mission_state_summary(
+    store: RunStore,
+    mission_id: str,
+    limit: int = 100,
+) -> MissionStateSummary | None:
+    runs = store.list_runs_for_mission(mission_id, limit=limit)
+    if not runs:
+        return None
+    ordered_runs = sorted(runs, key=lambda record: record.ingest.timestamp_utc, reverse=True)
+    latest = ordered_runs[0]
+    observations = _entity_observations_for_mission(ordered_runs)
+    recommendations = _entity_recommendations_for_mission(ordered_runs)
+    soldier_ids = sorted(
+        {item.soldier_id for item in observations}
+        | {item.recommendation.target_soldier_id for item in recommendations}
+    )
+    readiness_scores = [_soldier_readiness(observations, soldier_id) for soldier_id in soldier_ids]
+    platoon_readiness_score = (
+        round(sum(readiness_scores) / len(readiness_scores), 1) if readiness_scores else 0.0
+    )
+    latest_observations = sorted(
+        observations,
+        key=lambda item: item.timestamp_utc,
+        reverse=True,
+    )[:10]
+    latest_recommendations = sorted(
+        recommendations,
+        key=lambda item: item.recommendation.created_at_utc,
+        reverse=True,
+    )[:10]
+    return MissionStateSummary(
+        mission_id=mission_id,
+        latest_run_id=latest.run_id,
+        platoon_id=latest.ingest.platoon_id,
+        phase=latest.ingest.phase,
+        mission_type=latest.ingest.mission_type,
+        status=latest.status,
+        run_count=len(ordered_runs),
+        soldier_ids=soldier_ids,
+        total_observations=len(observations),
+        pending_recommendations=sum(1 for item in recommendations if item.status == "pending"),
+        approved_recommendations=sum(1 for item in recommendations if item.status == "approved"),
+        rejected_recommendations=sum(1 for item in recommendations if item.status == "rejected"),
+        blocked_recommendations=sum(1 for item in recommendations if item.status == "blocked"),
+        platoon_readiness_score=platoon_readiness_score,
+        development_edges=sorted(
+            {item.recommendation.development_edge for item in recommendations},
+            key=lambda edge: edge.value,
+        ),
+        latest_observation_refs=[item.ref for item in latest_observations],
+        latest_recommendation_refs=[item.ref for item in latest_recommendations],
+        source_refs=[f"postgres://ranger_runs/{record.run_id}" for record in ordered_runs],
+    )
+
+
+def build_graph_subgraph(
+    store: RunStore,
+    *,
+    run_id: str | None = None,
+    mission_id: str | None = None,
+    soldier_id: str | None = None,
+    limit: int = 100,
+) -> GraphSubgraph | None:
+    runs = _runs_for_subgraph(
+        store, run_id=run_id, mission_id=mission_id, soldier_id=soldier_id, limit=limit
+    )
+    if not runs:
+        return None
+    nodes: dict[str, GraphNode] = {}
+    edges: dict[str, GraphEdge] = {}
+
+    def add_node(node: GraphNode) -> None:
+        nodes.setdefault(node.node_id, node)
+
+    def add_edge(edge: GraphEdge) -> None:
+        edges.setdefault(edge.edge_id, edge)
+
+    for record in runs:
+        mission_node_id = f"mission:{record.ingest.mission_id}"
+        platoon_node_id = f"platoon:{record.ingest.platoon_id}"
+        run_ref = f"postgres://ranger_runs/{record.run_id}"
+        add_node(
+            GraphNode(
+                node_id=mission_node_id,
+                label=record.ingest.mission_id,
+                kind="Mission",
+                properties={
+                    "phase": record.ingest.phase.value,
+                    "mission_type": record.ingest.mission_type.value,
+                    "status": record.status.value,
+                    "latest_run_id": record.run_id,
+                },
+                ref=run_ref,
+            )
+        )
+        add_node(
+            GraphNode(
+                node_id=platoon_node_id,
+                label=record.ingest.platoon_id,
+                kind="Platoon",
+                properties={"phase": record.ingest.phase.value},
+                ref=run_ref,
+            )
+        )
+        add_edge(
+            GraphEdge(
+                edge_id=f"{platoon_node_id}->PART_OF->{mission_node_id}",
+                source_id=platoon_node_id,
+                target_id=mission_node_id,
+                label="PART_OF",
+            )
+        )
+
+        for index, observation in enumerate(record.observations):
+            observation_node_id = f"observation:{observation.observation_id}"
+            soldier_node_id = f"soldier:{observation.soldier_id}"
+            task_node_id = f"task:{observation.task_code}"
+            add_node(
+                GraphNode(
+                    node_id=soldier_node_id,
+                    label=observation.soldier_id,
+                    kind="Soldier",
+                    ref=run_ref,
+                )
+            )
+            add_node(
+                GraphNode(
+                    node_id=task_node_id,
+                    label=observation.task_code,
+                    kind="TaskStandard",
+                    ref=f"pgvector://doctrine/{observation.task_code}",
+                )
+            )
+            add_node(
+                GraphNode(
+                    node_id=observation_node_id,
+                    label=observation.task_code,
+                    kind="Observation",
+                    properties={
+                        "rating": observation.rating,
+                        "source": observation.source,
+                        "timestamp_utc": observation.timestamp_utc.isoformat(),
+                        "note_preview": observation.note[:180],
+                    },
+                    ref=f"{run_ref}#record.observations[{index}]",
+                )
+            )
+            add_edge(
+                GraphEdge(
+                    edge_id=f"{soldier_node_id}->MEMBER_OF->{platoon_node_id}",
+                    source_id=soldier_node_id,
+                    target_id=platoon_node_id,
+                    label="MEMBER_OF",
+                )
+            )
+            add_edge(
+                GraphEdge(
+                    edge_id=f"{soldier_node_id}->HAS_OBSERVATION->{observation_node_id}",
+                    source_id=soldier_node_id,
+                    target_id=observation_node_id,
+                    label="HAS_OBSERVATION",
+                    properties={"timestamp_utc": observation.timestamp_utc.isoformat()},
+                )
+            )
+            add_edge(
+                GraphEdge(
+                    edge_id=f"{observation_node_id}->ON_TASK->{task_node_id}",
+                    source_id=observation_node_id,
+                    target_id=task_node_id,
+                    label="ON_TASK",
+                )
+            )
+            add_edge(
+                GraphEdge(
+                    edge_id=f"{observation_node_id}->OBSERVED_DURING->{mission_node_id}",
+                    source_id=observation_node_id,
+                    target_id=mission_node_id,
+                    label="OBSERVED_DURING",
+                )
+            )
+
+        for index, record_item in enumerate(record.recommendations):
+            recommendation = record_item.recommendation
+            recommendation_node_id = f"recommendation:{recommendation.recommendation_id}"
+            soldier_node_id = f"soldier:{recommendation.target_soldier_id}"
+            add_node(
+                GraphNode(
+                    node_id=soldier_node_id,
+                    label=recommendation.target_soldier_id,
+                    kind="Soldier",
+                    ref=run_ref,
+                )
+            )
+            add_node(
+                GraphNode(
+                    node_id=recommendation_node_id,
+                    label=recommendation.development_edge.value,
+                    kind="Recommendation",
+                    properties={
+                        "status": record_item.status,
+                        "risk_level": recommendation.risk_level.value,
+                        "fairness_score": recommendation.fairness_score,
+                        "score": recommendation.score_breakdown.total
+                        if recommendation.score_breakdown
+                        else None,
+                    },
+                    ref=f"{run_ref}#record.recommendations[{index}]",
+                )
+            )
+            add_edge(
+                GraphEdge(
+                    edge_id=f"{recommendation_node_id}->TARGETS->{soldier_node_id}",
+                    source_id=recommendation_node_id,
+                    target_id=soldier_node_id,
+                    label="TARGETS",
+                )
+            )
+            for evidence_ref in recommendation.evidence_refs:
+                observation_id = _entity_id_from_locator(evidence_ref.ref, "Observation")
+                if observation_id:
+                    target_id = f"observation:{observation_id}"
+                    add_edge(
+                        GraphEdge(
+                            edge_id=f"{recommendation_node_id}->DERIVED_FROM->{target_id}",
+                            source_id=recommendation_node_id,
+                            target_id=target_id,
+                            label="DERIVED_FROM",
+                            properties={"role": evidence_ref.role},
+                        )
+                    )
+            if recommendation.target_ids.task_code:
+                task_node_id = f"task:{recommendation.target_ids.task_code}"
+                add_node(
+                    GraphNode(
+                        node_id=task_node_id,
+                        label=recommendation.target_ids.task_code,
+                        kind="TaskStandard",
+                        ref=f"pgvector://doctrine/{recommendation.target_ids.task_code}",
+                    )
+                )
+                add_edge(
+                    GraphEdge(
+                        edge_id=f"{recommendation_node_id}->CITES->{task_node_id}",
+                        source_id=recommendation_node_id,
+                        target_id=task_node_id,
+                        label="CITES",
+                    )
+                )
+
+    scope = {
+        key: value
+        for key, value in {
+            "run_id": run_id,
+            "mission_id": mission_id,
+            "soldier_id": soldier_id,
+        }.items()
+        if value
+    }
+    return GraphSubgraph(
+        scope=scope,
+        nodes=sorted(nodes.values(), key=lambda node: (node.kind, node.node_id)),
+        edges=sorted(edges.values(), key=lambda edge: edge.edge_id),
+        source_refs=[f"postgres://ranger_runs/{record.run_id}" for record in runs],
+    )
+
+
 def _run_refs(runs: list[RunRecord]) -> list[EntityRunReference]:
     return [
         EntityRunReference(
@@ -356,6 +666,40 @@ def _soldier_guidance(item: EntityRecommendation) -> SoldierRecommendationGuidan
 def _readiness_score(go_count: int, nogo_count: int, uncertain_count: int) -> float:
     raw = 70 + (go_count * 10) - (nogo_count * 15) - (uncertain_count * 5)
     return float(max(0, min(100, raw)))
+
+
+def _soldier_readiness(observations: list[EntityObservation], soldier_id: str) -> float:
+    soldier_observations = [item for item in observations if item.soldier_id == soldier_id]
+    return _readiness_score(
+        go_count=sum(1 for item in soldier_observations if item.rating == "GO"),
+        nogo_count=sum(1 for item in soldier_observations if item.rating == "NOGO"),
+        uncertain_count=sum(1 for item in soldier_observations if item.rating == "UNCERTAIN"),
+    )
+
+
+def _runs_for_subgraph(
+    store: RunStore,
+    *,
+    run_id: str | None,
+    mission_id: str | None,
+    soldier_id: str | None,
+    limit: int,
+) -> list[RunRecord]:
+    if run_id:
+        record = store.get(run_id)
+        return [] if record is None else [record]
+    if mission_id:
+        return store.list_runs_for_mission(mission_id, limit=limit)
+    if soldier_id:
+        return store.list_runs_for_soldier(soldier_id, limit=limit)
+    return store.list_recent_runs(limit=limit)
+
+
+def _entity_id_from_locator(locator: str, entity_type: str) -> str | None:
+    marker = f"/{entity_type}/"
+    if marker not in locator:
+        return None
+    return locator.split(marker, maxsplit=1)[1].split("#", maxsplit=1)[0] or None
 
 
 def _metric_status(value: float) -> Literal["strong", "watch", "critical"]:
