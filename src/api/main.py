@@ -13,6 +13,8 @@ from src.contracts import (
     AuditEvent,
     DashboardRunSummary,
     IngestEnvelope,
+    OutboxEvent,
+    OutboxPublishResponse,
     RecommendationDecision,
     RunRecord,
 )
@@ -86,6 +88,20 @@ def get_dashboard_run(run_id: str) -> DashboardRunSummary:
 def get_run_audit(run_id: str) -> list[AuditEvent]:
     get_run(run_id)
     return store.list_audit_events(run_id)
+
+
+@app.get("/v1/outbox", response_model=list[OutboxEvent])
+def list_pending_outbox_events(limit: int = 100) -> list[OutboxEvent]:
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 500")
+    return store.list_pending_outbox_events(limit=limit)
+
+
+@app.post("/v1/outbox/{event_id}/published", response_model=OutboxPublishResponse)
+def mark_outbox_event_published(event_id: str) -> OutboxPublishResponse:
+    if not store.mark_outbox_event_published(event_id):
+        raise HTTPException(status_code=404, detail="pending outbox event not found")
+    return OutboxPublishResponse(event_id=event_id, status="published")
 
 
 def _approve_recommendation(run_id: str, recommendation_id: str) -> ApprovalResponse:

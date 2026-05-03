@@ -24,6 +24,10 @@ class RunStore(Protocol):
 
     def list_outbox_events(self, run_id: str) -> list[OutboxEvent]: ...
 
+    def list_pending_outbox_events(self, limit: int = 100) -> list[OutboxEvent]: ...
+
+    def mark_outbox_event_published(self, event_id: str) -> bool: ...
+
 
 @dataclass
 class InMemoryRunStore:
@@ -64,6 +68,24 @@ class InMemoryRunStore:
             self.outbox_events.get(run_id, []),
             key=lambda event: event.timestamp_utc,
         )
+
+    def list_pending_outbox_events(self, limit: int = 100) -> list[OutboxEvent]:
+        events = [
+            event
+            for run_events in self.outbox_events.values()
+            for event in run_events
+            if event.status == "pending"
+        ]
+        return sorted(events, key=lambda event: event.timestamp_utc)[:limit]
+
+    def mark_outbox_event_published(self, event_id: str) -> bool:
+        for run_id, run_events in self.outbox_events.items():
+            for index, event in enumerate(run_events):
+                if event.event_id != event_id:
+                    continue
+                self.outbox_events[run_id][index] = event.model_copy(update={"status": "published"})
+                return True
+        return False
 
 
 @dataclass
@@ -267,6 +289,41 @@ class PostgresRunStore:
             for row in rows
         ]
 
+    def list_pending_outbox_events(self, limit: int = 100) -> list[OutboxEvent]:
+        with self._connect() as conn:
+            self._ensure_schema(conn)
+            rows = conn.execute(
+                """
+                SELECT
+                    event_id,
+                    event_type,
+                    aggregate_id,
+                    run_id,
+                    payload,
+                    status,
+                    timestamp_utc
+                FROM ranger_outbox_events
+                WHERE status = 'pending'
+                ORDER BY timestamp_utc ASC
+                LIMIT %s
+                """,
+                (limit,),
+            ).fetchall()
+        return [_outbox_event_from_row(row) for row in rows]
+
+    def mark_outbox_event_published(self, event_id: str) -> bool:
+        with self._connect() as conn:
+            self._ensure_schema(conn)
+            result = conn.execute(
+                """
+                UPDATE ranger_outbox_events
+                SET status = 'published'
+                WHERE event_id = %s AND status = 'pending'
+                """,
+                (event_id,),
+            )
+        return result.rowcount > 0
+
     def _connect(self) -> Any:
         import psycopg
 
@@ -352,3 +409,15 @@ def _record_from_payload(payload: Any) -> RunRecord:
     if isinstance(payload, str):
         return RunRecord.model_validate_json(payload)
     return RunRecord.model_validate(payload)
+
+
+def _outbox_event_from_row(row: Any) -> OutboxEvent:
+    return OutboxEvent(
+        event_id=row[0],
+        event_type=row[1],
+        aggregate_id=row[2],
+        run_id=row[3],
+        payload=row[4],
+        status=row[5],
+        timestamp_utc=row[6],
+    )

@@ -116,6 +116,8 @@ make verify
 - `GET /v1/runs/{run_id}/audit` returns durable run lifecycle and recommendation decision events.
 - `GET /v1/dashboard/runs/{run_id}` returns frontend-ready platoon and soldier performance metrics plus active recommendations.
 - `POST /v1/recommendations/{recommendation_id}/decision` records instructor approval or rejection.
+- `GET /v1/outbox` returns pending integration events for external workers.
+- `POST /v1/outbox/{event_id}/published` marks an outbox event as published.
 - `GET /v1/healthz` reports configured providers, FalkorDB health, and LangGraph importability.
 
 ## Safety Defaults

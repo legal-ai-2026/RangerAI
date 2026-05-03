@@ -205,3 +205,8 @@ class OutboxEvent(StrictModel):
     payload: dict[str, object] = Field(default_factory=dict)
     status: Literal["pending", "published"] = "pending"
     timestamp_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class OutboxPublishResponse(StrictModel):
+    event_id: str
+    status: Literal["published"]

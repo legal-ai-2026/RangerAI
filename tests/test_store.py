@@ -85,3 +85,7 @@ def test_memory_store_tracks_audit_and_outbox_events() -> None:
 
     assert store.list_audit_events("run-1") == [audit]
     assert store.list_outbox_events("run-1") == [outbox]
+    assert store.list_pending_outbox_events() == [outbox]
+    assert store.mark_outbox_event_published(outbox.event_id)
+    assert store.list_pending_outbox_events() == []
+    assert not store.mark_outbox_event_published("missing")

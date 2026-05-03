@@ -163,6 +163,8 @@ def test_api_exposes_only_versioned_operational_routes() -> None:
     assert "/v1/runs/{run_id}" in paths
     assert "/v1/runs/{run_id}/audit" in paths
     assert "/v1/recommendations/{recommendation_id}/decision" in paths
+    assert "/v1/outbox" in paths
+    assert "/v1/outbox/{event_id}/published" in paths
     assert "/ingest" not in paths
     assert "/runs/{run_id}" not in paths
     assert "/healthz" not in paths
@@ -191,3 +193,42 @@ def test_process_records_error_when_run_lease_is_held() -> None:
     updated = store.get(record.run_id)
     assert updated is not None
     assert updated.errors == ["run is already being processed"]
+
+
+def test_outbox_events_can_be_marked_published() -> None:
+    store = InMemoryRunStore()
+    workflow = fake_workflow(store)
+    previous_store = main.store
+    previous_workflow = main.workflow
+    try:
+        main.store = store
+        main.workflow = workflow
+        record = workflow.create_run(
+            IngestEnvelope(
+                instructor_id="ri-1",
+                platoon_id="plt-1",
+                mission_id="m-1",
+                phase=Phase.mountain,
+                geo=GeoPoint(lat=35.0, lon=-83.0, grid_mgrs="17S"),
+                free_text="Jones blew Phase Line Bird.",
+            )
+        )
+        asyncio.run(workflow.process(record.run_id))
+        completed = store.get(record.run_id)
+        assert completed is not None
+        pending = next(item for item in completed.recommendations if item.status == "pending")
+        workflow.approve(
+            completed.run_id,
+            pending.recommendation.recommendation_id,
+            approved=True,
+        )
+
+        events = main.list_pending_outbox_events()
+        assert len(events) == 1
+        response = main.mark_outbox_event_published(events[0].event_id)
+
+        assert response.status == "published"
+        assert main.list_pending_outbox_events() == []
+    finally:
+        main.store = previous_store
+        main.workflow = previous_workflow
