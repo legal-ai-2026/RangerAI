@@ -8,7 +8,9 @@ from src.config import Settings, settings
 
 
 class LeaseHandle(Protocol):
-    acquired: bool
+    @property
+    def acquired(self) -> bool:
+        ...
 
     def release(self) -> None:
         ...

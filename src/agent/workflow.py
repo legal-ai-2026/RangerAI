@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 from src.agent.cache import RunLease, build_run_lease
@@ -146,32 +146,41 @@ class RangerWorkflow:
             )
             for item in updated.recommendations:
                 if item.recommendation.recommendation_id == recommendation_id:
+                    if item.status not in {"approved", "rejected"}:
+                        raise ValueError(
+                            f"recommendation decision produced invalid status {item.status}"
+                        )
+                    decision_status = cast(Literal["approved", "rejected"], item.status)
                     self.store.append_audit_event(
                         AuditEvent(
                             run_id=run_id,
                             event_type="recommendation_decision_recorded",
                             actor_id=record.ingest.instructor_id,
                             recommendation_id=recommendation_id,
-                            payload={"status": item.status},
+                            payload={"status": decision_status},
                         )
                     )
-                    if item.status in {"approved", "rejected"}:
-                        self.store.append_outbox_event(
-                            OutboxEvent(
-                                event_type=f"recommendation.{item.status}",
-                                aggregate_id=recommendation_id,
-                                run_id=run_id,
-                                payload={
-                                    "recommendation_id": recommendation_id,
-                                    "status": item.status,
-                                    "target_soldier_id": item.recommendation.target_soldier_id,
-                                },
-                            )
+                    event_type: Literal["recommendation.approved", "recommendation.rejected"] = (
+                        "recommendation.approved"
+                        if decision_status == "approved"
+                        else "recommendation.rejected"
+                    )
+                    self.store.append_outbox_event(
+                        OutboxEvent(
+                            event_type=event_type,
+                            aggregate_id=recommendation_id,
+                            run_id=run_id,
+                            payload={
+                                "recommendation_id": recommendation_id,
+                                "status": decision_status,
+                                "target_soldier_id": item.recommendation.target_soldier_id,
+                            },
                         )
+                    )
                     return ApprovalResponse(
                         run_id=run_id,
                         recommendation_id=recommendation_id,
-                        status=item.status,
+                        status=decision_status,
                     )
             raise KeyError(f"recommendation {recommendation_id} not found")
         finally:

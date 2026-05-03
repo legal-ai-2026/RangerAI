@@ -102,6 +102,8 @@ def _reject_recommendation(run_id: str, recommendation_id: str) -> ApprovalRespo
         return workflow.approve(run_id, recommendation_id, approved=False)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def _approve_recommendation_by_id(recommendation_id: str) -> ApprovalResponse:
