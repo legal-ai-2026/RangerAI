@@ -17,6 +17,50 @@ that caused it.
 | FalkorDB | Canonical relationship graph for people, units, missions, tasks, observations, recommendations | Use idempotent `MERGE`; never mint substitute person or mission IDs |
 | Redis | Leases, locks, checkpoints, rate counters, short-lived cache | TTL required for coordination keys |
 
+## System 1 Data Mutations Implemented Here
+
+This repository is System 1. It changes shared data only through the FastAPI
+workflow and the store adapters in `src/agent/`, `src/kg/`, and `src/api/`.
+The main app runs outside Kubernetes; the shared infrastructure stores may run
+inside the cluster.
+
+| Trigger | Store | Record changed | How it changes data |
+|---|---|---|---|
+| `POST /v1/ingest` | Postgres `ranger_runs` | `RunRecord` keyed by `run_id` | Inserts an accepted run with the inbound `IngestEnvelope`; later processing updates the same row's `status` and JSON `record` |
+| `POST /v1/ingest` | Postgres `ranger_audit_events` | `run_accepted` | Appends an immutable event with `mission_id`, `platoon_id`, `phase`, and `instructor_id` as actor |
+| Background processing starts | Redis | `ranger:run-lease:{run_id}` | Creates a 900-second lease with `SET NX EX`; deletes it on release if the token still matches |
+| Background processing starts | Postgres `ranger_audit_events` | `run_processing_started` | Appends an immutable event before STT/OCR/extraction work begins |
+| STT/OCR/extraction completes | Postgres `ranger_runs.record` | `transcript`, `ocr_pages`, `observations` | Replaces the materialized run JSON with derived transcript text, OCR rows, and normalized observations; raw audio and image payloads are not separately persisted by this project |
+| Observation graph write | FalkorDB graph `ranger` | `Mission`, `Platoon`, `Soldier`, `Task`, `Observation` nodes and relationships | Uses `MERGE` on canonical IDs, sets observation note/rating/timestamp, and links `Soldier -> Platoon -> Mission`, `Soldier -> Observation`, and `Observation -> Task` |
+| Recommendation drafting and policy | Postgres `ranger_runs.record` | `recommendations[]`, run `status` | Stores draft `ScenarioRecommendation` records with policy decisions; allowed items become `pending`, blocked items become `blocked`, and the run moves to `pending_approval` |
+| Processing completes or fails | Postgres `ranger_audit_events` | `run_status_updated` or `run_failed` | Appends immutable lifecycle events with final processing status or error text |
+| `POST /v1/recommendations/{id}/decision` approve/reject | Postgres `ranger_runs.record` | Matching recommendation status | Updates the materialized run JSON to `approved` or `rejected`; blocked recommendations cannot be approved |
+| Approved recommendation emit | FalkorDB graph `ranger` | `Recommendation` node | Uses `MERGE`, sets target soldier, rationale, risk level, and fairness score, then links `Recommendation -> Soldier` with `TARGETS` |
+| Recommendation decision | Postgres `ranger_audit_events` | `recommendation_decision_recorded` | Appends an immutable approval/rejection audit event with actor and recommendation ID |
+| Recommendation decision | Postgres `ranger_outbox_events` | `recommendation.approved` or `recommendation.rejected` | Appends a pending integration event containing recommendation ID, decision status, and target soldier ID |
+| `POST /v1/outbox/{event_id}/published` | Postgres `ranger_outbox_events` | Outbox event `status` | Mutates only `status`, from `pending` to `published`, after a consumer confirms it applied the event |
+| Direct `PgVectorStore.upsert` adapter use | Postgres `ranger_vector_documents` with pgvector | Vector document keyed by `(namespace, document_id)` | Upserts retrievable text, metadata, and embedding; this adapter is implemented, but the ingest workflow does not yet call it automatically |
+
+System 1 does not delete shared records. It does not write System 2 trajectory
+profiles or System 3 lessons-learned records. It currently reads health from
+the configured infrastructure and writes only the records listed above.
+
+## System 1 Current Tables And Keys
+
+When Postgres is configured, `PostgresRunStore` creates these operational
+tables:
+
+| Table | Primary key | Mutability | Purpose |
+|---|---|---|---|
+| `ranger_runs` | `run_id` | Mutable materialized state | Current run status, ingest envelope, transcript, OCR rows, observations, KG write summary, recommendation records, and errors |
+| `ranger_audit_events` | `event_id` | Append-only | Run lifecycle and instructor decision events |
+| `ranger_outbox_events` | `event_id` | Append-only except `status` | Integration events for other systems to consume |
+| `ranger_vector_documents` | `(namespace, document_id)` | Upsert by namespace/document ID | Semantic documents and embeddings for pgvector retrieval |
+
+`ranger_runs.record` is the current materialized state. Other systems should
+prefer audit/outbox/update-ledger records when they need a historical sequence
+of changes.
+
 ## Canonical IDs
 
 These IDs are shared across all apps and must be treated as stable foreign keys:
@@ -130,6 +174,15 @@ FalkorDB stores relationship truth:
 All apps may read the graph. Writes must use `MERGE` on canonical IDs. A service
 must not delete another service's nodes or relationships.
 
+Current System 1 graph writes:
+
+- `write_observations` implements `Mission`, `Platoon`, `Soldier`, `Task`, and
+  `Observation` node merges plus the observation relationships shown above.
+- `write_recommendation` currently implements `Recommendation` merge and
+  `Recommendation-[:TARGETS]->Soldier` only. `DERIVED_FROM` and `CITES` are
+  target-contract relationships and should be added when recommendation
+  `evidence_refs` are implemented.
+
 ### Postgres
 
 Postgres stores durable operational truth:
@@ -240,6 +293,16 @@ Rules:
   a `drift_detected` audit event and avoid silent overwrite.
 - Agentic outputs must cite the version IDs they used.
 
+Current System 1 status:
+
+- Run state changes are materialized in `ranger_runs.record`.
+- Lifecycle and instructor decisions are stored separately in
+  `ranger_audit_events`.
+- Cross-system decision notifications are stored separately in
+  `ranger_outbox_events`.
+- A dedicated `ranger_update_ledger` table and content-hash drift helper are
+  not implemented yet.
+
 ## Drift Detection Responsibilities
 
 | Service | Drift checks |
@@ -288,6 +351,8 @@ Every app should have tests or evals proving:
 ## Current Gaps To Implement
 
 - Add `evidence_refs` and `target_ids` fields to System 1 output contracts.
+- Use those evidence refs to write `Recommendation-[:DERIVED_FROM]->Observation`
+  and `Recommendation-[:CITES]->Task` graph edges.
 - Add a Postgres update ledger table and drift detection helper.
 - Add pgvector ingestion for doctrine, observations, lessons, and trajectory
   summaries.
