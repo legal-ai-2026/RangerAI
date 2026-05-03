@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, TypedDict, cast
 
 from typing_extensions import NotRequired
 
@@ -18,19 +18,38 @@ from src.contracts import (
 from src.ingest.providers import ProviderClients
 from src.kg.client import KGClient
 
+MemorySaver: Any
+StateGraph: Any
+Command: Any
+START: Any
+END: Any
+interrupt: Any
+
 try:
-    from langgraph.checkpoint.memory import MemorySaver
-    from langgraph.graph import END, START, StateGraph
-    from langgraph.types import Command, interrupt
+    from langgraph.checkpoint.memory import MemorySaver as _ImportedMemorySaver
+    from langgraph.graph import END as _ImportedEnd
+    from langgraph.graph import START as _ImportedStart
+    from langgraph.graph import StateGraph as _ImportedStateGraph
+    from langgraph.types import Command as _ImportedCommand
+    from langgraph.types import interrupt as _imported_interrupt
 except Exception:  # pragma: no cover - dependency probe covers minimal environments
-    MemorySaver = None  # type: ignore[assignment]
-    StateGraph = None  # type: ignore[assignment]
-    Command = None  # type: ignore[assignment]
+    MemorySaver = None
+    StateGraph = None
+    Command = None
     START = "__start__"
     END = "__end__"
 
-    def interrupt(_payload: dict[str, Any]) -> Any:  # type: ignore[misc]
+    def _missing_interrupt(_payload: dict[str, Any]) -> Any:
         raise RuntimeError("langgraph is not installed")
+
+    interrupt = _missing_interrupt
+else:
+    MemorySaver = _ImportedMemorySaver
+    StateGraph = _ImportedStateGraph
+    Command = _ImportedCommand
+    START = _ImportedStart
+    END = _ImportedEnd
+    interrupt = _imported_interrupt
 
 
 ApprovalAction = Literal["approve", "reject"]
@@ -221,24 +240,29 @@ class FallbackRangerGraph:
                 "status": RunStatus.completed if _all_decided(records) else RunStatus.pending_approval,
             }
             if _all_decided(records):
-                state.update(await self.nodes.emit_node(state))
+                state = _merge_state(state, await self.nodes.emit_node(state))
             else:
-                state["pending_approval_payload"] = _pending_payload(state)
+                state = _merge_state(state, {"pending_approval_payload": _pending_payload(state)})
             self.checkpoints[thread_id] = state
             return dict(state)
 
-        state = dict(input_data)
-        state.update(await self.nodes.stt_node(state))
-        state.update(await self.nodes.ocr_node(state))
-        state.update(await self.nodes.extract_node(state))
-        state.update(await self.nodes.kg_write_node(state))
-        state.update(await self.nodes.reason_node(state))
-        state.update(await self.nodes.policy_node(state))
-        state["pending_approval_payload"] = None if _all_decided(
-            state.get("recommendations", [])
-        ) else _pending_payload(state)
+        state = cast(RangerState, dict(input_data))
+        state = _merge_state(state, await self.nodes.stt_node(state))
+        state = _merge_state(state, await self.nodes.ocr_node(state))
+        state = _merge_state(state, await self.nodes.extract_node(state))
+        state = _merge_state(state, await self.nodes.kg_write_node(state))
+        state = _merge_state(state, await self.nodes.reason_node(state))
+        state = _merge_state(state, await self.nodes.policy_node(state))
+        state = _merge_state(
+            state,
+            {
+                "pending_approval_payload": None
+                if _all_decided(state.get("recommendations", []))
+                else _pending_payload(state)
+            },
+        )
         if _all_decided(state.get("recommendations", [])):
-            state.update(await self.nodes.emit_node(state))
+            state = _merge_state(state, await self.nodes.emit_node(state))
         self.checkpoints[thread_id] = state
         return dict(state)
 
@@ -262,8 +286,8 @@ def extract_state(output: dict[str, Any], graph: Any, config: dict[str, Any]) ->
         values = dict(snapshot.values)
         values["pending_approval_payload"] = _interrupt_payload(output)
         values["status"] = RunStatus.pending_approval
-        return values
-    return output
+        return cast(RangerState, values)
+    return cast(RangerState, output)
 
 
 def _approval_route(state: RangerState) -> str:
@@ -340,6 +364,10 @@ def _apply_decision(
 
 def _all_decided(records: list[RecommendationRecord]) -> bool:
     return all(item.status in {"approved", "rejected", "blocked"} for item in records)
+
+
+def _merge_state(state: RangerState, updates: dict[str, Any]) -> RangerState:
+    return cast(RangerState, {**state, **updates})
 
 
 def _thread_id(config: dict[str, Any]) -> str:
