@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any, cast
 
 from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,6 +14,8 @@ from src.agent.workflow import RangerWorkflow
 from src.api import main
 from src.config import Settings
 from src.contracts import (
+    CalibrationCueTag,
+    CalibrationSignal,
     EvidenceRef,
     GeoPoint,
     IngestEnvelope,
@@ -35,6 +38,9 @@ class FakeKG:
     def write_recommendation(self, _recommendation) -> None:
         return None
 
+    def recent_observation_refs(self, soldier_ids):
+        return {soldier_id: [] for soldier_id in soldier_ids}
+
 
 class FakeProviders:
     async def transcribe(self, _audio_b64: str) -> str:
@@ -56,10 +62,10 @@ def _install_fake_runtime(monkeypatch, api_key: str | None = None) -> InMemoryRu
     kg = FakeKG()
     workflow = RangerWorkflow(
         store=store,
-        providers=providers,
-        kg=kg,
+        providers=cast(Any, providers),
+        kg=cast(Any, kg),
         lease=InMemoryRunLease(),
-        graph=FallbackRangerGraph(providers=providers, kg=kg),
+        graph=FallbackRangerGraph(providers=cast(Any, providers), kg=cast(Any, kg)),
     )
     monkeypatch.setattr(main, "store", store)
     monkeypatch.setattr(main, "workflow", workflow)
@@ -128,7 +134,20 @@ def test_http_ingest_review_decision_and_soldier_performance_flow(monkeypatch) -
     pending = next(item for item in run.recommendations if item.status == "pending")
     recommendation = pending.recommendation
     assert recommendation.intervention_id
-    assert recommendation.score_breakdown.total
+    score_breakdown = recommendation.score_breakdown
+    assert score_breakdown is not None
+    assert score_breakdown.total
+    assert score_breakdown.observability > 0
+    assert recommendation.evidence_summary
+    assert recommendation.why_now
+    assert recommendation.expected_learning_signal
+    assert recommendation.risk_controls
+    assert recommendation.model_context_refs
+    assert recommendation.calibration_support is not None
+    assert (
+        CalibrationCueTag.communication_timing
+        in recommendation.calibration_support.cue_tags_to_watch
+    )
 
     dashboard = main.get_dashboard_run(run_id)
     assert dashboard.pending_recommendations == 3
@@ -147,7 +166,14 @@ def test_http_ingest_review_decision_and_soldier_performance_flow(monkeypatch) -
     )
     decision = main.decide_recommendation(
         recommendation.recommendation_id,
-        RecommendationDecision(decision="approve", edited_recommendation=edited),
+        RecommendationDecision(
+            decision="approve",
+            edited_recommendation=edited,
+            decision_rationale=(
+                "Instructor edit keeps the recommendation bounded and verifies the same "
+                "communication gap with less ambiguity."
+            ),
+        ),
         _request(
             f"/v1/recommendations/{recommendation.recommendation_id}/decision",
             method="POST",
@@ -185,15 +211,82 @@ def test_http_ingest_review_decision_and_soldier_performance_flow(monkeypatch) -
     )
     assert decision_event.trace_id == "trace-decision"
     assert decision_event.payload["edited"] is True
+    assert decision_event.payload["decision_rationale"]
     outbox = main.list_pending_outbox_events()
     assert outbox[0].trace_id == "trace-decision"
     assert outbox[0].payload["edited"] is True
+    assert outbox[0].payload["decision_rationale"]
     updates = main.store.list_update_events(
         entity_type="recommendation",
         entity_id=decision.recommendation_id,
     )
-    assert "two-minute SITREP" in updates[0].patch["recommendation"]["proposed_modification"]
+    recommendation_patch = cast(dict[str, Any], updates[0].patch["recommendation"])
+    assert "two-minute SITREP" in recommendation_patch["proposed_modification"]
     assert updates[0].trace_id == "trace-decision"
+
+    signal = CalibrationSignal(
+        signal_id="calibration-1",
+        recommendation_id=decision.recommendation_id,
+        run_id=run_id,
+        instructor_id="ri-1",
+        outcome="improved",
+        cue_tags=[CalibrationCueTag.communication_timing],
+        observed_learning_signal="Jones gave a concise SITREP without prompting.",
+        notes="Instructor saw a clear communication timing improvement at the next halt.",
+    )
+    calibration_receipt = main.record_recommendation_feedback(
+        decision.recommendation_id,
+        signal,
+        _request(
+            f"/v1/recommendations/{decision.recommendation_id}/feedback",
+            method="POST",
+            headers={"X-Trace-Id": "trace-calibration"},
+        ),
+    )
+    duplicate_calibration = main.record_recommendation_feedback(
+        decision.recommendation_id,
+        signal,
+        _request(f"/v1/recommendations/{decision.recommendation_id}/feedback", method="POST"),
+    )
+    assert calibration_receipt.status == "accepted"
+    assert duplicate_calibration.status == "duplicate"
+    assert (
+        f"postgres://ranger_calibration_signals/{signal.signal_id}"
+        in calibration_receipt.source_refs
+    )
+
+    calibration_profile = main.get_soldier_calibration_profile("Jones")
+    assert calibration_profile.signal_count == 1
+    assert calibration_profile.outcome_counts == {"improved": 1}
+    assert calibration_profile.cue_profiles[0].cue_tag == CalibrationCueTag.communication_timing
+
+    team_calibration = main.get_mission_team_calibration_profile("m-1")
+    assert team_calibration.mission_id == "m-1"
+    assert team_calibration.platoon_id == "plt-1"
+    assert team_calibration.signal_count == 1
+    assert team_calibration.outcome_counts == {"improved": 1}
+    assert team_calibration.member_summaries[0].soldier_id == "Jones"
+    mission_state = main.get_mission_state("m-1")
+    assert mission_state.team_calibration_profile is not None
+    assert mission_state.team_calibration_profile.signal_count == 1
+
+    calibrated_trajectory = main.get_soldier_training_trajectory("Jones")
+    assert calibrated_trajectory.calibration_profile is not None
+    assert calibrated_trajectory.calibration_profile.signal_count == 1
+    assert calibrated_trajectory.calibration_profile.outcome_counts == {"improved": 1}
+
+    calibration_updates = main.store.list_update_events(
+        entity_type="calibration_signal",
+        entity_id=signal.signal_id,
+    )
+    assert len(calibration_updates) == 1
+    assert calibration_updates[0].trace_id == "trace-calibration"
+    calibration_event = next(
+        event
+        for event in main.get_run_audit(run_id)
+        if event.event_type == "calibration_feedback_recorded"
+    )
+    assert calibration_event.trace_id == "trace-calibration"
 
     lesson = LessonsLearnedSignal(
         lesson_id="lesson-1",
@@ -268,8 +361,9 @@ def test_cors_allowlist_installs_expected_middleware() -> None:
     main._install_cors(app, Settings(cors_allow_origins=("http://localhost:3000",)))
 
     middleware = app.user_middleware[0]
+    kwargs = cast(dict[str, Any], middleware.kwargs)
     assert middleware.cls is CORSMiddleware
-    assert middleware.kwargs["allow_origins"] == ["http://localhost:3000"]
-    assert middleware.kwargs["allow_methods"] == ["GET", "POST", "OPTIONS"]
-    assert "X-API-Key" in middleware.kwargs["allow_headers"]
-    assert "X-Trace-Id" in middleware.kwargs["allow_headers"]
+    assert kwargs["allow_origins"] == ["http://localhost:3000"]
+    assert kwargs["allow_methods"] == ["GET", "POST", "OPTIONS"]
+    assert "X-API-Key" in kwargs["allow_headers"]
+    assert "X-Trace-Id" in kwargs["allow_headers"]

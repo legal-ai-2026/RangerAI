@@ -1,0 +1,122 @@
+[
+  {
+    "envelope_id": "long-001",
+    "instructor_id": "ri-alpha-1",
+    "platoon_id": "plt-alpha",
+    "mission_id": "m-alpha-benning-mv-01",
+    "phase": "Benning",
+    "mission_type": "Movement",
+    "timestamp_utc": "2026-04-01T14:00:00Z",
+    "geo": {
+      "lat": 32.36,
+      "lon": -84.95,
+      "grid_mgrs": "16S DEMO A1"
+    },
+    "free_text": "Jones blew Phase Line Bird and gave no SITREP. Smith textbook movement control. Garcia delegated the checkpoint report clearly."
+  },
+  {
+    "envelope_id": "long-002",
+    "instructor_id": "ri-alpha-2",
+    "platoon_id": "plt-alpha",
+    "mission_id": "m-alpha-benning-pb-02",
+    "phase": "Benning",
+    "mission_type": "PatrolBase",
+    "timestamp_utc": "2026-04-04T03:20:00Z",
+    "geo": {
+      "lat": 32.37,
+      "lon": -84.94,
+      "grid_mgrs": "16S DEMO A2"
+    },
+    "free_text": "Jones corrected the SITREP at the halt. Smith asleep at 0300 during patrol-base security. Garcia textbook priorities of work."
+  },
+  {
+    "envelope_id": "long-003",
+    "instructor_id": "ri-alpha-1",
+    "platoon_id": "plt-alpha",
+    "mission_id": "m-alpha-mountain-amb-03",
+    "phase": "Mountain",
+    "mission_type": "Ambush",
+    "timestamp_utc": "2026-04-12T21:15:00Z",
+    "geo": {
+      "lat": 35.0,
+      "lon": -83.0,
+      "grid_mgrs": "17S DEMO A3"
+    },
+    "free_text": "Jones delivered a concise SITREP before the ambush rehearsal. Smith corrected patrol-base security checks. Garcia blew ambush initiation and missed fire control cues."
+  },
+  {
+    "envelope_id": "long-004",
+    "instructor_id": "ri-alpha-3",
+    "platoon_id": "plt-alpha",
+    "mission_id": "m-alpha-mountain-pb-04",
+    "phase": "Mountain",
+    "mission_type": "PatrolBase",
+    "timestamp_utc": "2026-04-15T04:10:00Z",
+    "geo": {
+      "lat": 35.01,
+      "lon": -83.02,
+      "grid_mgrs": "17S DEMO A4"
+    },
+    "free_text": "Jones maintained movement reporting despite fatigue. Smith textbook priorities of work. Garcia corrected fire control rehearsal but hesitated on delegation."
+  },
+  {
+    "envelope_id": "long-005",
+    "instructor_id": "ri-bravo-1",
+    "platoon_id": "plt-bravo",
+    "mission_id": "m-bravo-benning-mv-01",
+    "phase": "Benning",
+    "mission_type": "Movement",
+    "timestamp_utc": "2026-04-02T15:30:00Z",
+    "geo": {
+      "lat": 32.35,
+      "lon": -84.96,
+      "grid_mgrs": "16S DEMO B1"
+    },
+    "free_text": "Taylor blew Phase Line Cedar and gave no SITREP. Nguyen textbook movement report. Patel delegated a checkpoint report clearly."
+  },
+  {
+    "envelope_id": "long-006",
+    "instructor_id": "ri-bravo-2",
+    "platoon_id": "plt-bravo",
+    "mission_id": "m-bravo-florida-pb-02",
+    "phase": "Florida",
+    "mission_type": "PatrolBase",
+    "timestamp_utc": "2026-04-18T05:05:00Z",
+    "geo": {
+      "lat": 30.12,
+      "lon": -82.6,
+      "grid_mgrs": "17R DEMO B2"
+    },
+    "free_text": "Taylor corrected the SITREP during movement. Nguyen asleep during security at 0300. Patel textbook priorities of work in the patrol base."
+  },
+  {
+    "envelope_id": "long-007",
+    "instructor_id": "ri-bravo-1",
+    "platoon_id": "plt-bravo",
+    "mission_id": "m-bravo-florida-amb-03",
+    "phase": "Florida",
+    "mission_type": "Ambush",
+    "timestamp_utc": "2026-04-21T20:40:00Z",
+    "geo": {
+      "lat": 30.15,
+      "lon": -82.58,
+      "grid_mgrs": "17R DEMO B3"
+    },
+    "free_text": "Taylor gave a concise SITREP before the ambush. Nguyen corrected security checks after coaching. Patel blew ambush initiation and missed fire control cues."
+  },
+  {
+    "envelope_id": "long-008",
+    "instructor_id": "ri-bravo-3",
+    "platoon_id": "plt-bravo",
+    "mission_id": "m-bravo-florida-raid-04",
+    "phase": "Florida",
+    "mission_type": "Raid",
+    "timestamp_utc": "2026-04-24T18:00:00Z",
+    "geo": {
+      "lat": 30.16,
+      "lon": -82.57,
+      "grid_mgrs": "17R DEMO B4"
+    },
+    "free_text": "Taylor maintained movement reporting despite heat and wet terrain. Nguyen textbook priorities of work. Patel corrected fire control rehearsal but hesitated on delegation."
+  }
+]

@@ -1,5 +1,5 @@
 from src.agent.policy import PolicyEngine
-from src.contracts import DevelopmentEdge, RiskLevel, ScenarioRecommendation
+from src.contracts import DevelopmentEdge, RecommendationScore, RiskLevel, ScenarioRecommendation
 
 
 def recommendation(target: str, risk: RiskLevel = RiskLevel.low) -> ScenarioRecommendation:
@@ -36,3 +36,37 @@ def test_policy_blocks_cold_water_immersion_language() -> None:
     decision = PolicyEngine(roster={"Jones"}).evaluate(unsafe)
     assert not decision.allowed
     assert "unsafe cold-water or immersion condition detected" in decision.reasons
+
+
+def test_policy_blocks_high_uncertainty_recommendation() -> None:
+    uncertain = recommendation("Jones").model_copy(
+        update={
+            "score_breakdown": RecommendationScore(
+                learning_delta=0.8,
+                doctrinal_fit=0.8,
+                instructor_utility=0.7,
+                observability=0.4,
+                novelty_bonus=0.1,
+                safety_risk=0.1,
+                fatigue_overload=0.1,
+                uncertainty_penalty=0.85,
+                fairness_penalty=0.0,
+                repetition_penalty=0.0,
+                total=0.95,
+            )
+        }
+    )
+    decision = PolicyEngine(roster={"Jones"}).evaluate(uncertain)
+    assert not decision.allowed
+    assert "observation uncertainty exceeds display threshold" in decision.reasons
+
+
+def test_policy_suppresses_excessive_repeat_targeting() -> None:
+    policy = PolicyEngine(roster={"Jones", "Smith"})
+    policy.record_approved("Jones")
+    policy.record_approved("Jones")
+
+    decision = policy.evaluate(recommendation("Jones"))
+
+    assert not decision.allowed
+    assert "fairness counter would exceed platoon spread threshold" in decision.reasons

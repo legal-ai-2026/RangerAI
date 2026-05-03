@@ -44,6 +44,7 @@ should not write into `ranger_runs`, `ranger_audit_events`, or
 | `GET` | `/v1/runs/{run_id}` | Frontend, System 2, System 3 | Fetch canonical System 1 run state | `observations`, `recommendations`, `kg_write_summary`, `errors` |
 | `GET` | `/v1/dashboard/runs/{run_id}` | Frontend | Fetch presentation-neutral summary | per-soldier GO/NOGO counts, readiness score, active recommendations |
 | `GET` | `/v1/missions/{mission_id}/state` | Frontend | Fetch compact mission-command projection | latest run, platoon, phase, readiness, observations, recommendation counts, source refs |
+| `GET` | `/v1/missions/{mission_id}/team-calibration-profile` | Frontend, System 2, System 3 | Fetch derived mission/platoon calibration summary | cue, development-edge, and member summaries from existing approved recommendation feedback |
 | `GET` | `/v1/entities/soldiers/{soldier_id}` | Frontend, System 2, System 3 | Fetch System 1's read-only projection for a soldier ID | runs, observations, recommendation records, and update refs tied to that soldier |
 | `GET` | `/v1/entities/missions/{mission_id}` | Frontend, System 2, System 3 | Fetch System 1's read-only projection for a mission ID | runs, soldier IDs, observations, recommendation records, and update refs tied to that mission |
 | `GET` | `/v1/soldiers/{soldier_id}/performance` | Soldier-facing app or frontend | Fetch self-service performance guidance | aggregate metrics, recent task ratings, and instructor-approved recommendations only |
@@ -52,6 +53,8 @@ should not write into `ranger_runs`, `ranger_audit_events`, or
 | `GET` | `/v1/recommendations/recent` | Frontend | Fetch recent recommendation queue | `EntityRecommendation[]`, optionally filtered by `mission_id` or `status` |
 | `GET` | `/v1/recommendations/{recommendation_id}` | Frontend, System 2, System 3 | Fetch one recommendation with run/policy context | `EntityRecommendation` |
 | `POST` | `/v1/recommendations/{recommendation_id}/decision` | Frontend/instructor workflow | Approve, edit-approve, or reject a recommendation | `ApprovalResponse` with final status |
+| `POST` | `/v1/recommendations/{recommendation_id}/feedback` | Frontend/instructor workflow | Record post-inject calibration feedback for an approved recommendation | `CalibrationReceipt` with `status=accepted` or `duplicate` |
+| `GET` | `/v1/soldiers/{soldier_id}/calibration-profile` | Frontend, System 2, System 3 | Fetch deterministic cue/outcome calibration summary | `SoldierCalibrationProfile` |
 | `GET` | `/v1/graph/subgraph` | Frontend, System 2, System 3 | Fetch a relationship projection around run, mission, soldier, or recent state | `GraphSubgraph` nodes and edges with source refs |
 | `GET` | `/v1/outbox` | System 2, System 3, integration workers | Poll pending System 1 decision events | `OutboxEvent[]` |
 | `GET` | `/v1/update-ledger` | System 2, System 3, integration workers | Poll append-only System 1 observation, recommendation, and lesson-signal updates | `UpdateLedgerEntry[]` filtered by optional `entity_type` and `entity_id` |
@@ -64,6 +67,8 @@ service resolves the owning `run_id` from its run store.
 The trajectory endpoint is read-only and does not create a System 2 trajectory
 profile. The lessons endpoint records only a System 1 receipt/update reference;
 System 3 remains the source of truth for the lesson record itself.
+Team calibration profiles are derived-only mission/platoon summaries. They do
+not add assessment categories or modify GO/NOGO/UNCERTAIN ratings.
 
 ## System 1 State Machine
 
@@ -139,6 +144,11 @@ Derived `Observation`:
 | `intervention_id` | string or null | Curated intervention-library ID used to generate the recommendation |
 | `learning_objective` | string or null | Competency-oriented objective for the scenario modification |
 | `score_breakdown` | object or null | Transparent candidate score components before policy filtering |
+| `decision_frame` | object or null | Decision objective, actor, constraints, alternatives, reversibility, and uncertainties |
+| `decision_quality` | object or null | Evidence quality, safety/fairness margins, observability, learning utility, reliance risk, and rating |
+| `value_of_information` | object or null | Whether more source review is recommended before approval |
+| `review_requirements` | object array | Required instructor acknowledgements for allowed but uncertain or consequential recommendations |
+| `calibration_support` | object or null | Cue tags to watch, feedback prompt, prior signal count, and outcome trend for calibration |
 | `created_by` | string | Producing service, currently `system-1` |
 | `created_at_utc` | datetime | Recommendation creation timestamp |
 
@@ -147,6 +157,10 @@ Derived `Observation`:
 `fairness_penalty`, `repetition_penalty`, and `total`. The score ranks library
 candidates before deterministic policy and instructor review; it is not an
 approval signal.
+
+`review_requirements[].requirement_id` values are stable machine-readable
+tokens. Current values include `medium_risk_ack`, `high_uncertainty_review`,
+`low_observability_review`, and `context_degraded_review`.
 
 `RecommendationRecord` wraps a recommendation with:
 
@@ -186,6 +200,11 @@ ratings, `pending_review_count`, `blocked_recommendation_count`, and only
 `task_codes`, or `recommendation_ids`. `POST /v1/lessons-learned` is
 idempotent on `lesson_id`; duplicate requests return `status=duplicate` and do
 not append another update ledger entry.
+
+`CalibrationSignal` is accepted after an approved recommendation. It captures
+the instructor's observed outcome, cue tags, confidence, and learning signal.
+It is idempotent on `signal_id` and appends an update ledger entry with
+`entity_type=calibration_signal` only on first receipt.
 
 `OutboxEvent.payload` currently contains:
 
@@ -263,11 +282,11 @@ inside the cluster.
 | Observation graph write | FalkorDB graph `ranger` | `Mission`, `Platoon`, `Soldier`, `Task`, `Observation` nodes and relationships | Uses `MERGE` on canonical IDs, sets observation note/rating/timestamp, and links `Soldier -> Platoon -> Mission`, `Soldier -> Observation`, and `Observation -> Task` |
 | Recommendation drafting and policy | Postgres `ranger_runs.record` | `recommendations[]`, run `status` | Stores draft `ScenarioRecommendation` records with policy decisions; allowed items become `pending`, blocked items become `blocked`, and the run moves to `pending_approval` |
 | Processing completes or fails | Postgres `ranger_audit_events` | `run_status_updated` or `run_failed` | Appends immutable lifecycle events with final processing status or error text |
-| `POST /v1/recommendations/{id}/decision` approve/edit/reject | Postgres `ranger_runs.record` | Matching recommendation status and optional edited recommendation | Updates the materialized run JSON to `approved` or `rejected`; edited approvals rerun policy and blocked recommendations cannot be approved |
-| Recommendation decision | Postgres `ranger_update_ledger` | `recommendation` update | Appends an immutable `approve` or `reject` event with target IDs, evidence refs, source refs, and content hash |
+| `POST /v1/recommendations/{id}/decision` approve/edit/reject | Postgres `ranger_runs.record` | Matching recommendation status, optional edited recommendation, decision rationale, and acknowledgements | Updates the materialized run JSON to `approved` or `rejected`; edited approvals rerun policy, blocked recommendations cannot be approved, and required review items must be acknowledged |
+| Recommendation decision | Postgres `ranger_update_ledger` | `recommendation` update | Appends an immutable `approve` or `reject` event with target IDs, evidence refs, decision rationale, acknowledged review requirements, source refs, and content hash |
 | Approved recommendation emit | FalkorDB graph `ranger` | `Recommendation` node and provenance edges | Uses `MERGE`, sets target soldier, rationale, risk level, and fairness score, then links `Recommendation -> Soldier` with `TARGETS`, `Recommendation -> Observation` with `DERIVED_FROM`, and `Recommendation -> Task` with `CITES` when provenance is present |
-| Recommendation decision | Postgres `ranger_audit_events` | `recommendation_decision_recorded` | Appends an immutable approval/rejection audit event with actor and recommendation ID |
-| Recommendation decision | Postgres `ranger_outbox_events` | `recommendation.approved` or `recommendation.rejected` | Appends a pending integration event containing recommendation ID, decision status, and target soldier ID |
+| Recommendation decision | Postgres `ranger_audit_events` | `recommendation_decision_recorded` | Appends an immutable approval/rejection audit event with actor, recommendation ID, rationale, and acknowledgements |
+| Recommendation decision | Postgres `ranger_outbox_events` | `recommendation.approved` or `recommendation.rejected` | Appends a pending integration event containing recommendation ID, decision status, target soldier ID, decision quality, and review evidence |
 | `POST /v1/outbox/{event_id}/published` | Postgres `ranger_outbox_events` | Outbox event `status` | Mutates only `status`, from `pending` to `published`, after a consumer confirms it applied the event |
 | `POST /v1/lessons-learned` | Postgres `ranger_lesson_signals` and `ranger_update_ledger` | Lesson signal receipt keyed by `lesson_id` | Inserts the receipt only once per `lesson_id`; first receipt appends a `lesson_signal` update with System 3 as `source_service`, duplicates return without another update |
 | Direct `PgVectorStore.upsert` adapter use | Postgres `ranger_vector_documents` with pgvector | Vector document keyed by `(namespace, document_id)` | Upserts retrievable text, metadata, and embedding; this adapter is implemented, but the ingest workflow does not yet call it automatically |

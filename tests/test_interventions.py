@@ -34,12 +34,12 @@ def test_intervention_library_scores_and_ranks_observed_development_edges() -> N
     assert recommendations[0].intervention_id == "comm_degraded_sitrep"
     assert recommendations[0].development_edge == DevelopmentEdge.communications
     assert recommendations[0].learning_objective
-    assert recommendations[0].score_breakdown is not None
-    assert (
-        recommendations[0].score_breakdown.learning_delta
-        > recommendations[2].score_breakdown.learning_delta
-    )
-    assert recommendations[0].score_breakdown.total > recommendations[2].score_breakdown.total
+    first_score = recommendations[0].score_breakdown
+    last_score = recommendations[2].score_breakdown
+    assert first_score is not None
+    assert last_score is not None
+    assert first_score.learning_delta > last_score.learning_delta
+    assert first_score.total > last_score.total
 
 
 def test_intervention_score_flags_fatigue_without_unsafe_overload() -> None:

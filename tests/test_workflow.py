@@ -1,11 +1,12 @@
 import asyncio
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastapi import Request
 from pydantic import BaseModel
 
+from src.agent.decision_science import MEDIUM_RISK_ACK
 from src.agent.cache import InMemoryRunLease
 from src.agent.graph import (
     FallbackRangerGraph,
@@ -16,7 +17,7 @@ from src.agent.graph import (
 from src.agent.store import InMemoryRunStore
 from src.agent.workflow import RangerWorkflow
 from src.api import main
-from src.contracts import GeoPoint, IngestEnvelope, Phase
+from src.contracts import GeoPoint, IngestEnvelope, ORBookletPage, ORBookletRow, Phase
 from src.ingest.providers import heuristic_observations, heuristic_recommendations
 
 
@@ -63,6 +64,40 @@ class FakeProviders:
         return heuristic_recommendations(observations)
 
 
+class ImageProviders(FakeProviders):
+    async def ocr_pages(self, _image_b64: list[str]):
+        return [
+            ORBookletPage(
+                confidence=0.92,
+                rows=[
+                    ORBookletRow(
+                        task_code="MV-2",
+                        task_name="Movement report",
+                        rating="NOGO",
+                        observation_note="Jones missed Phase Line Bird and did not send a SITREP.",
+                    )
+                ],
+            )
+        ]
+
+
+class LowConfidenceImageProviders(FakeProviders):
+    async def ocr_pages(self, _image_b64: list[str]):
+        return [
+            ORBookletPage(
+                confidence=0.42,
+                rows=[
+                    ORBookletRow(
+                        task_code="MV-2",
+                        task_name="Movement report",
+                        rating="NOGO",
+                        observation_note="Jones maybe missed Phase Line Bird.",
+                    )
+                ],
+            )
+        ]
+
+
 def fake_workflow(
     store: InMemoryRunStore,
     providers: FakeProviders | None = None,
@@ -73,10 +108,10 @@ def fake_workflow(
     kg = kg or FakeKG()
     return RangerWorkflow(
         store=store,
-        providers=providers,
-        kg=kg,
+        providers=cast(Any, providers),
+        kg=cast(Any, kg),
         lease=lease,
-        graph=FallbackRangerGraph(providers=providers, kg=kg),
+        graph=FallbackRangerGraph(providers=cast(Any, providers), kg=cast(Any, kg)),
     )
 
 
@@ -122,9 +157,18 @@ def test_ingest_to_approval_workflow() -> None:
     assert first_recommendation.target_ids.mission_id == "m-1"
     assert first_recommendation.target_ids.platoon_id == "plt-1"
     assert first_recommendation.evidence_refs
-    assert first_recommendation.model_context_refs == [
-        f"postgres://ranger_runs/{record.run_id}#record.observations"
-    ]
+    assert f"postgres://ranger_runs/{record.run_id}#record.observations" in (
+        first_recommendation.model_context_refs
+    )
+    assert any(
+        ref.startswith("asset://doctrine/") for ref in first_recommendation.model_context_refs
+    )
+    assert any(
+        ref.startswith("synthetic://weather/") for ref in first_recommendation.model_context_refs
+    )
+    assert first_recommendation.decision_frame is not None
+    assert first_recommendation.decision_quality is not None
+    assert first_recommendation.value_of_information is not None
 
     pending = next(item for item in completed.recommendations if item.status == "pending")
     approval = workflow.approve(
@@ -156,12 +200,13 @@ def test_ingest_to_approval_workflow() -> None:
     assert recommendation_updates[0].operation == "approve"
     assert recommendation_updates[0].trace_id == "trace-workflow"
     assert recommendation_updates[0].source_refs
+    assert recommendation_updates[0].patch["decision_quality"]
 
 
 def test_graph_checkpoint_state_is_json_safe() -> None:
     providers = FakeProviders()
     kg = FakeKG()
-    graph = build_ranger_graph(providers=providers, kg=kg)
+    graph = build_ranger_graph(providers=cast(Any, providers), kg=cast(Any, kg))
     state = {
         "run_id": "run-json-safe",
         "ingest": IngestEnvelope(
@@ -202,6 +247,57 @@ def _assert_json_safe(value: Any) -> None:
     elif isinstance(value, list):
         for item in value:
             _assert_json_safe(item)
+
+
+def test_medium_risk_approval_requires_rationale_and_acknowledgement() -> None:
+    store = InMemoryRunStore()
+    workflow = fake_workflow(store)
+    record = workflow.create_run(
+        IngestEnvelope(
+            instructor_id="ri-1",
+            platoon_id="plt-1",
+            mission_id="m-1",
+            phase=Phase.mountain,
+            geo=GeoPoint(lat=35.0, lon=-83.0, grid_mgrs="17S"),
+            free_text="Smith asleep at 0300 during patrol-base security.",
+        )
+    )
+    asyncio.run(workflow.process(record.run_id))
+    completed = store.get(record.run_id)
+    assert completed is not None
+    pending = next(item for item in completed.recommendations if item.status == "pending")
+    recommendation = pending.recommendation
+    assert MEDIUM_RISK_ACK in {
+        requirement.requirement_id for requirement in recommendation.review_requirements
+    }
+
+    with pytest.raises(ValueError, match="acknowledged review requirements"):
+        workflow.approve(completed.run_id, recommendation.recommendation_id, approved=True)
+
+    with pytest.raises(ValueError, match="decision_rationale"):
+        workflow.approve(
+            completed.run_id,
+            recommendation.recommendation_id,
+            approved=True,
+            acknowledged_review_requirements=[MEDIUM_RISK_ACK],
+        )
+
+    approval = workflow.approve(
+        completed.run_id,
+        recommendation.recommendation_id,
+        approved=True,
+        decision_rationale="Instructor reviewed fatigue controls and accepts the supervised inject.",
+        acknowledged_review_requirements=[MEDIUM_RISK_ACK],
+    )
+
+    assert approval.status == "approved"
+    audit_event = next(
+        event
+        for event in store.list_audit_events(record.run_id)
+        if event.recommendation_id == recommendation.recommendation_id
+    )
+    assert audit_event.payload["decision_rationale"]
+    assert audit_event.payload["acknowledged_review_requirements"] == [MEDIUM_RISK_ACK]
 
 
 def test_recommendation_context_includes_recent_kg_history() -> None:
@@ -250,6 +346,57 @@ def test_process_continues_when_kg_write_fails() -> None:
     assert completed.recommendations
     assert completed.kg_write_summary == {"observations": 0}
     assert completed.errors == ["KG write failed: FalkorDB unavailable"]
+
+
+def test_image_only_ingest_uses_ocr_rows_for_observations_and_recommendations() -> None:
+    store = InMemoryRunStore()
+    workflow = fake_workflow(store, providers=ImageProviders())
+    record = workflow.create_run(
+        IngestEnvelope(
+            instructor_id="ri-1",
+            platoon_id="plt-1",
+            mission_id="m-1",
+            phase=Phase.mountain,
+            geo=GeoPoint(lat=35.0, lon=-83.0, grid_mgrs="17S"),
+            image_b64=["fake-image"],
+        )
+    )
+
+    asyncio.run(workflow.process(record.run_id))
+
+    completed = store.get(record.run_id)
+    assert completed is not None
+    assert completed.observations[0].source == "image"
+    assert completed.observations[0].rating == "NOGO"
+    assert completed.recommendations
+    recommendation = completed.recommendations[0].recommendation
+    assert recommendation.evidence_summary
+    assert recommendation.score_breakdown is not None
+    assert recommendation.model_context_refs
+
+
+def test_low_confidence_ocr_rows_remain_uncertain_and_do_not_drive_recommendations() -> None:
+    store = InMemoryRunStore()
+    workflow = fake_workflow(store, providers=LowConfidenceImageProviders())
+    record = workflow.create_run(
+        IngestEnvelope(
+            instructor_id="ri-1",
+            platoon_id="plt-1",
+            mission_id="m-1",
+            phase=Phase.mountain,
+            geo=GeoPoint(lat=35.0, lon=-83.0, grid_mgrs="17S"),
+            image_b64=["fake-image"],
+        )
+    )
+
+    asyncio.run(workflow.process(record.run_id))
+
+    completed = store.get(record.run_id)
+    assert completed is not None
+    assert completed.observations[0].rating == "UNCERTAIN"
+    assert completed.observations[0].uncertainty_refs
+    assert completed.recommendations == []
+    assert completed.status == "completed"
 
 
 def test_dashboard_summary_includes_soldier_metrics_and_recommendations() -> None:
@@ -442,8 +589,44 @@ def test_v1_decision_rejects_instructor_edit_that_fails_policy() -> None:
         main.workflow = previous_workflow
 
 
+def test_instructor_edit_approval_requires_decision_rationale() -> None:
+    store = InMemoryRunStore()
+    workflow = fake_workflow(store)
+    record = workflow.create_run(
+        IngestEnvelope(
+            instructor_id="ri-1",
+            platoon_id="plt-1",
+            mission_id="m-1",
+            phase=Phase.mountain,
+            geo=GeoPoint(lat=35.0, lon=-83.0, grid_mgrs="17S"),
+            free_text="Jones blew Phase Line Bird.",
+        )
+    )
+    asyncio.run(workflow.process(record.run_id))
+    completed = store.get(record.run_id)
+    assert completed is not None
+    pending = next(item for item in completed.recommendations if item.status == "pending")
+    edited = pending.recommendation.model_copy(
+        update={
+            "proposed_modification": (
+                "At the next covered halt, have Jones issue a two-minute SITREP."
+            )
+        }
+    )
+
+    with pytest.raises(ValueError, match="decision_rationale"):
+        workflow.approve(
+            completed.run_id,
+            pending.recommendation.recommendation_id,
+            approved=True,
+            edited_recommendation=edited,
+        )
+
+
 def test_api_exposes_only_versioned_operational_routes() -> None:
-    paths = {route.path for route in main.app.routes}
+    paths = {
+        path for route in main.app.routes if isinstance(path := getattr(route, "path", None), str)
+    }
     assert "/v1/ingest" in paths
     assert "/v1/readyz" in paths
     assert "/v1/runs/{run_id}" in paths

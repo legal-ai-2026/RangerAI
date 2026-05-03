@@ -39,6 +39,17 @@ class DevelopmentEdge(str, Enum):
     team_accountability = "team_accountability"
 
 
+class CalibrationCueTag(str, Enum):
+    communication_timing = "communication_timing"
+    security_posture = "security_posture"
+    fire_control_timing = "fire_control_timing"
+    fatigue_stress = "fatigue_stress"
+    terrain_interaction = "terrain_interaction"
+    team_coordination = "team_coordination"
+    leadership_delegation = "leadership_delegation"
+    source_uncertainty = "source_uncertainty"
+
+
 class RiskLevel(str, Enum):
     low = "low"
     medium = "medium"
@@ -107,6 +118,8 @@ class Observation(StrictModel):
     rating: Literal["GO", "NOGO", "UNCERTAIN"] = "UNCERTAIN"
     timestamp_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     source: Literal["audio", "image", "free_text", "synthetic"] = "synthetic"
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    uncertainty_refs: list[str] = Field(default_factory=list)
 
 
 class ORBookletRow(StrictModel):
@@ -135,16 +148,119 @@ class EvidenceRef(StrictModel):
     role: str = Field(min_length=1)
 
 
+class DoctrineChunk(StrictModel):
+    doctrine_ref: str = Field(min_length=1)
+    task_code: str = Field(min_length=1)
+    title: str = Field(min_length=1, max_length=200)
+    text: str = Field(min_length=20, max_length=1200)
+    source_ref: str = Field(min_length=1)
+    confidence: float = Field(default=1.0, ge=0, le=1)
+
+
+class WeatherSnapshot(StrictModel):
+    provider: str = Field(min_length=1)
+    source_ref: str = Field(min_length=1)
+    generated_at_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    temperature_c: float | None = None
+    apparent_temperature_c: float | None = None
+    wind_speed_kph: float | None = None
+    wind_gust_kph: float | None = None
+    precipitation_probability: float | None = Field(default=None, ge=0, le=1)
+    precipitation_mm: float | None = Field(default=None, ge=0)
+    alerts: list[str] = Field(default_factory=list)
+    confidence: float = Field(default=1.0, ge=0, le=1)
+    synthetic: bool = False
+
+    @field_validator("generated_at_utc")
+    @classmethod
+    def require_generated_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("generated_at_utc must include timezone information")
+        return value.astimezone(timezone.utc)
+
+
+class TerrainSnapshot(StrictModel):
+    provider: str = Field(min_length=1)
+    source_ref: str = Field(min_length=1)
+    generated_at_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    elevation_m: float | None = None
+    slope_class: Literal["unknown", "flat", "gentle", "moderate", "steep"] = "unknown"
+    water_proximity_m: float | None = Field(default=None, ge=0)
+    terrain_class: Literal["unknown", "urban", "wooded", "mountain", "swamp", "mixed"] = "unknown"
+    hazards: list[str] = Field(default_factory=list)
+    confidence: float = Field(default=1.0, ge=0, le=1)
+    synthetic: bool = False
+
+    @field_validator("generated_at_utc")
+    @classmethod
+    def require_terrain_generated_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("generated_at_utc must include timezone information")
+        return value.astimezone(timezone.utc)
+
+
 class RecommendationScore(StrictModel):
     learning_delta: float = Field(ge=0, le=1)
     doctrinal_fit: float = Field(ge=0, le=1)
     instructor_utility: float = Field(ge=0, le=1)
+    observability: float = Field(default=0.0, ge=0, le=1)
     novelty_bonus: float = Field(ge=0, le=1)
     safety_risk: float = Field(ge=0, le=1)
     fatigue_overload: float = Field(ge=0, le=1)
+    uncertainty_penalty: float = Field(default=0.0, ge=0, le=1)
     fairness_penalty: float = Field(ge=0, le=1)
     repetition_penalty: float = Field(ge=0, le=1)
     total: float
+
+
+class DecisionFrame(StrictModel):
+    objective: str = Field(min_length=10, max_length=300)
+    decision_actor: str = Field(default="instructor", min_length=1, max_length=80)
+    decision_scope: str = Field(default="training_recommendation", min_length=1, max_length=120)
+    constraints: list[str] = Field(default_factory=list)
+    alternatives_considered: list[str] = Field(default_factory=list)
+    time_pressure: Literal["routine", "compressed", "urgent"] = "compressed"
+    reversibility: Literal["reversible", "partially_reversible", "hard_to_reverse"] = (
+        "partially_reversible"
+    )
+    primary_uncertainties: list[str] = Field(default_factory=list)
+
+
+class DecisionQuality(StrictModel):
+    information_quality: float = Field(ge=0, le=1)
+    safety_margin: float = Field(ge=0, le=1)
+    fairness_margin: float = Field(ge=0, le=1)
+    observability: float = Field(ge=0, le=1)
+    learning_utility: float = Field(ge=0, le=1)
+    reliance_risk: float = Field(ge=0, le=1)
+    overall: float = Field(ge=0, le=1)
+    rating: Literal["strong", "review", "weak"]
+
+
+class ValueOfInformation(StrictModel):
+    collect_more: bool
+    reason: str = Field(min_length=10, max_length=500)
+    suggested_action: str | None = Field(default=None, max_length=500)
+
+
+class ReviewRequirement(StrictModel):
+    requirement_id: str = Field(min_length=1, max_length=120)
+    required_for_approval: bool = True
+    reason: str = Field(min_length=10, max_length=500)
+
+
+CalibrationOutcome = Literal["improved", "no_change", "worsened", "unsafe_abort", "unclear"]
+CalibrationOutcomeTrend = Literal["insufficient_data", "improving", "mixed", "negative"]
+
+
+class CalibrationSupport(StrictModel):
+    calibration_goal: str = Field(min_length=10, max_length=500)
+    cue_tags_to_watch: list[CalibrationCueTag] = Field(default_factory=list)
+    feedback_prompt: str = Field(min_length=10, max_length=700)
+    prior_signal_count: int = Field(default=0, ge=0)
+    outcome_trend: CalibrationOutcomeTrend = "insufficient_data"
+    recommended_feedback_window: str = Field(min_length=3, max_length=160)
+    source_refs: list[str] = Field(default_factory=list)
 
 
 class ScenarioRecommendation(StrictModel):
@@ -163,9 +279,19 @@ class ScenarioRecommendation(StrictModel):
     evidence_refs: list[EvidenceRef] = Field(default_factory=list)
     model_context_refs: list[str] = Field(default_factory=list)
     policy_refs: list[str] = Field(default_factory=list)
+    evidence_summary: str | None = Field(default=None, max_length=700)
+    why_now: str | None = Field(default=None, max_length=700)
+    expected_learning_signal: str | None = Field(default=None, max_length=700)
+    risk_controls: str | None = Field(default=None, max_length=700)
+    uncertainty_refs: list[str] = Field(default_factory=list)
     intervention_id: str | None = None
     learning_objective: str | None = None
     score_breakdown: RecommendationScore | None = None
+    decision_frame: DecisionFrame | None = None
+    decision_quality: DecisionQuality | None = None
+    value_of_information: ValueOfInformation | None = None
+    review_requirements: list[ReviewRequirement] = Field(default_factory=list)
+    calibration_support: CalibrationSupport | None = None
     created_by: str = "system-1"
     created_at_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -211,6 +337,8 @@ class ApprovalResponse(StrictModel):
 class RecommendationDecision(StrictModel):
     decision: Literal["approve", "reject"]
     edited_recommendation: ScenarioRecommendation | None = None
+    decision_rationale: str | None = Field(default=None, max_length=1000)
+    acknowledged_review_requirements: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def require_approval_for_edits(self) -> "RecommendationDecision":
@@ -270,6 +398,7 @@ class MissionStateSummary(StrictModel):
     blocked_recommendations: int
     platoon_readiness_score: float = Field(ge=0, le=100)
     development_edges: list[DevelopmentEdge] = Field(default_factory=list)
+    team_calibration_profile: CalibrationProfileSummary | None = None
     latest_observation_refs: list[str] = Field(default_factory=list)
     latest_recommendation_refs: list[str] = Field(default_factory=list)
     source_refs: list[str] = Field(default_factory=list)
@@ -388,6 +517,19 @@ class SoldierRecommendationGuidance(StrictModel):
     risk_level: RiskLevel
     fairness_score: float = Field(ge=0, le=1)
     evidence_refs: list[EvidenceRef] = Field(default_factory=list)
+    model_context_refs: list[str] = Field(default_factory=list)
+    policy_refs: list[str] = Field(default_factory=list)
+    evidence_summary: str | None = None
+    why_now: str | None = None
+    expected_learning_signal: str | None = None
+    risk_controls: str | None = None
+    uncertainty_refs: list[str] = Field(default_factory=list)
+    score_breakdown: RecommendationScore | None = None
+    decision_frame: DecisionFrame | None = None
+    decision_quality: DecisionQuality | None = None
+    value_of_information: ValueOfInformation | None = None
+    review_requirements: list[ReviewRequirement] = Field(default_factory=list)
+    calibration_support: CalibrationSupport | None = None
 
 
 class SoldierPerformanceReport(StrictModel):
@@ -438,6 +580,81 @@ class DevelopmentEdgeTrajectory(StrictModel):
     source_refs: list[str] = Field(default_factory=list)
 
 
+class CalibrationProfileSummary(StrictModel):
+    signal_count: int = Field(default=0, ge=0)
+    outcome_counts: dict[str, int] = Field(default_factory=dict)
+    outcome_trend: CalibrationOutcomeTrend = "insufficient_data"
+    strongest_cue_tags: list[CalibrationCueTag] = Field(default_factory=list)
+    source_refs: list[str] = Field(default_factory=list)
+
+
+class CalibrationCueProfile(StrictModel):
+    cue_tag: CalibrationCueTag
+    signal_count: int = Field(ge=0)
+    outcome_counts: dict[str, int] = Field(default_factory=dict)
+    outcome_trend: CalibrationOutcomeTrend = "insufficient_data"
+    source_refs: list[str] = Field(default_factory=list)
+
+
+class CalibrationInterventionProfile(StrictModel):
+    intervention_id: str
+    development_edge: DevelopmentEdge | None = None
+    signal_count: int = Field(ge=0)
+    outcome_counts: dict[str, int] = Field(default_factory=dict)
+    outcome_trend: CalibrationOutcomeTrend = "insufficient_data"
+    latest_signal_id: str | None = None
+    cue_tags: list[CalibrationCueTag] = Field(default_factory=list)
+    source_refs: list[str] = Field(default_factory=list)
+
+
+class SoldierCalibrationProfile(StrictModel):
+    soldier_id: str
+    generated_at_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    signal_count: int = Field(ge=0)
+    outcome_counts: dict[str, int] = Field(default_factory=dict)
+    outcome_trend: CalibrationOutcomeTrend = "insufficient_data"
+    cue_profiles: list[CalibrationCueProfile] = Field(default_factory=list)
+    intervention_profiles: list[CalibrationInterventionProfile] = Field(default_factory=list)
+    source_refs: list[str] = Field(default_factory=list)
+    update_refs: list[str] = Field(default_factory=list)
+
+
+class TeamDevelopmentEdgeCalibrationProfile(StrictModel):
+    development_edge: DevelopmentEdge | None = None
+    signal_count: int = Field(ge=0)
+    outcome_counts: dict[str, int] = Field(default_factory=dict)
+    outcome_trend: CalibrationOutcomeTrend = "insufficient_data"
+    cue_tags: list[CalibrationCueTag] = Field(default_factory=list)
+    source_refs: list[str] = Field(default_factory=list)
+
+
+class TeamMemberCalibrationSummary(StrictModel):
+    soldier_id: str = Field(min_length=1)
+    signal_count: int = Field(ge=0)
+    outcome_counts: dict[str, int] = Field(default_factory=dict)
+    outcome_trend: CalibrationOutcomeTrend = "insufficient_data"
+    strongest_cue_tags: list[CalibrationCueTag] = Field(default_factory=list)
+    source_refs: list[str] = Field(default_factory=list)
+
+
+class TeamCalibrationProfile(StrictModel):
+    mission_id: str
+    generated_at_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    platoon_id: str | None = None
+    run_count: int = Field(ge=0)
+    soldier_count: int = Field(ge=0)
+    signal_count: int = Field(ge=0)
+    outcome_counts: dict[str, int] = Field(default_factory=dict)
+    outcome_trend: CalibrationOutcomeTrend = "insufficient_data"
+    cue_profiles: list[CalibrationCueProfile] = Field(default_factory=list)
+    development_edge_profiles: list[TeamDevelopmentEdgeCalibrationProfile] = Field(
+        default_factory=list
+    )
+    member_summaries: list[TeamMemberCalibrationSummary] = Field(default_factory=list)
+    source_refs: list[str] = Field(default_factory=list)
+    update_refs: list[str] = Field(default_factory=list)
+
+
 class SoldierTrainingTrajectory(StrictModel):
     soldier_id: str
     generated_at_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -448,9 +665,41 @@ class SoldierTrainingTrajectory(StrictModel):
     readiness_score: float = Field(ge=0, le=100)
     task_summaries: list[TaskTrajectorySummary] = Field(default_factory=list)
     development_edges: list[DevelopmentEdgeTrajectory] = Field(default_factory=list)
+    calibration_profile: CalibrationProfileSummary | None = None
     recent_points: list[TaskTrajectoryPoint] = Field(default_factory=list)
     source_refs: list[str] = Field(default_factory=list)
     update_refs: list[str] = Field(default_factory=list)
+
+
+class CalibrationSignal(StrictModel):
+    signal_id: str = Field(default_factory=lambda: str(uuid4()))
+    recommendation_id: str = Field(min_length=1)
+    run_id: str = Field(min_length=1)
+    instructor_id: str = Field(min_length=1)
+    target_soldier_id: str | None = Field(default=None, min_length=1)
+    task_code: str | None = Field(default=None, min_length=1)
+    development_edge: DevelopmentEdge | None = None
+    intervention_id: str | None = Field(default=None, min_length=1)
+    outcome: CalibrationOutcome
+    cue_tags: list[CalibrationCueTag] = Field(min_length=1)
+    observed_learning_signal: str = Field(min_length=5, max_length=1000)
+    confidence: float = Field(default=0.8, ge=0, le=1)
+    notes: str | None = Field(default=None, max_length=1000)
+    evidence_refs: list[EvidenceRef] = Field(default_factory=list)
+    occurred_at_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator("occurred_at_utc")
+    @classmethod
+    def require_calibration_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("occurred_at_utc must include timezone information")
+        return value.astimezone(timezone.utc)
+
+
+class CalibrationReceipt(StrictModel):
+    signal_id: str
+    status: Literal["accepted", "duplicate"]
+    source_refs: list[str] = Field(default_factory=list)
 
 
 class LessonsLearnedSignal(StrictModel):
@@ -496,6 +745,7 @@ class AuditEvent(StrictModel):
         "run_failed",
         "run_lease_blocked",
         "recommendation_decision_recorded",
+        "calibration_feedback_recorded",
     ]
     actor_id: str | None = None
     recommendation_id: str | None = None

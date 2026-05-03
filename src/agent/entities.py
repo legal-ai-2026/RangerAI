@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from typing import Literal
 
+from src.agent.calibration import (
+    build_soldier_calibration_profile as _build_soldier_calibration_profile,
+)
+from src.agent.calibration import calibration_profile_summary, team_calibration_summary_for_runs
 from src.agent.store import RunStore
 from src.contracts import (
     DevelopmentEdgeTrajectory,
@@ -19,6 +23,7 @@ from src.contracts import (
     PerformanceMetric,
     RecommendationRecord,
     RunRecord,
+    SoldierCalibrationProfile,
     SoldierEntityProjection,
     SoldierObservationDigest,
     SoldierPerformanceReport,
@@ -164,6 +169,10 @@ def build_soldier_training_trajectory(
         return None
     observations = _entity_observations_for_soldier(runs, soldier_id)
     recommendations = _entity_recommendations_for_soldier(runs, soldier_id)
+    calibration_signals = store.list_calibration_signals(
+        target_soldier_id=soldier_id,
+        limit=limit,
+    )
 
     go_count = sum(1 for item in observations if item.rating == "GO")
     nogo_count = sum(1 for item in observations if item.rating == "NOGO")
@@ -182,6 +191,7 @@ def build_soldier_training_trajectory(
         readiness_score=_readiness_score(go_count, nogo_count, uncertain_count),
         task_summaries=_task_trajectory_summaries(observations),
         development_edges=_development_edge_trajectories(recommendations),
+        calibration_profile=calibration_profile_summary(calibration_signals),
         recent_points=[
             TaskTrajectoryPoint(
                 run_id=item.run_id,
@@ -201,6 +211,14 @@ def build_soldier_training_trajectory(
         source_refs=[f"postgres://ranger_runs/{record.run_id}" for record in runs],
         update_refs=_update_refs(store, observations, recommendations),
     )
+
+
+def build_soldier_calibration_profile(
+    store: RunStore,
+    soldier_id: str,
+    limit: int = 100,
+) -> SoldierCalibrationProfile | None:
+    return _build_soldier_calibration_profile(store, soldier_id, limit=limit)
 
 
 def get_recommendation_entity(
@@ -291,6 +309,11 @@ def build_mission_state_summary(
         development_edges=sorted(
             {item.recommendation.development_edge for item in recommendations},
             key=lambda edge: edge.value,
+        ),
+        team_calibration_profile=team_calibration_summary_for_runs(
+            store,
+            ordered_runs,
+            limit=limit,
         ),
         latest_observation_refs=[item.ref for item in latest_observations],
         latest_recommendation_refs=[item.ref for item in latest_recommendations],
@@ -447,6 +470,12 @@ def build_graph_subgraph(
                         "fairness_score": recommendation.fairness_score,
                         "score": recommendation.score_breakdown.total
                         if recommendation.score_breakdown
+                        else None,
+                        "decision_quality": recommendation.decision_quality.overall
+                        if recommendation.decision_quality
+                        else None,
+                        "decision_quality_rating": recommendation.decision_quality.rating
+                        if recommendation.decision_quality
                         else None,
                     },
                     ref=f"{run_ref}#record.recommendations[{index}]",
@@ -615,23 +644,18 @@ def _update_refs(
     observations: list[EntityObservation],
     recommendations: list[EntityRecommendation],
 ) -> list[str]:
-    refs: set[str] = set()
-    for observation in observations:
-        refs.update(
-            f"postgres://ranger_update_ledger/{event.version_id}"
-            for event in store.list_update_events(
-                entity_type="observation",
-                entity_id=observation.observation_id,
-            )
-        )
-    for recommendation in recommendations:
-        refs.update(
-            f"postgres://ranger_update_ledger/{event.version_id}"
-            for event in store.list_update_events(
-                entity_type="recommendation",
-                entity_id=recommendation.recommendation.recommendation_id,
-            )
-        )
+    observation_ids = {observation.observation_id for observation in observations}
+    recommendation_ids = {
+        recommendation.recommendation.recommendation_id for recommendation in recommendations
+    }
+    limit = max(1000, (len(observation_ids) + len(recommendation_ids)) * 10)
+    events = store.list_update_events(limit=limit)
+    refs = {
+        f"postgres://ranger_update_ledger/{event.version_id}"
+        for event in events
+        if (event.entity_type == "observation" and event.entity_id in observation_ids)
+        or (event.entity_type == "recommendation" and event.entity_id in recommendation_ids)
+    }
     return sorted(refs)
 
 
@@ -660,6 +684,19 @@ def _soldier_guidance(item: EntityRecommendation) -> SoldierRecommendationGuidan
         risk_level=recommendation.risk_level,
         fairness_score=recommendation.fairness_score,
         evidence_refs=list(recommendation.evidence_refs),
+        model_context_refs=list(recommendation.model_context_refs),
+        policy_refs=list(recommendation.policy_refs),
+        evidence_summary=recommendation.evidence_summary,
+        why_now=recommendation.why_now,
+        expected_learning_signal=recommendation.expected_learning_signal,
+        risk_controls=recommendation.risk_controls,
+        uncertainty_refs=list(recommendation.uncertainty_refs),
+        score_breakdown=recommendation.score_breakdown,
+        decision_frame=recommendation.decision_frame,
+        decision_quality=recommendation.decision_quality,
+        value_of_information=recommendation.value_of_information,
+        review_requirements=list(recommendation.review_requirements),
+        calibration_support=recommendation.calibration_support,
     )
 
 

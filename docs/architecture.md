@@ -25,6 +25,7 @@ Frontend or caller
     -> deterministic policy filter
     -> instructor approval gate
     -> emit final recommendation and audit event
+    -> capture post-inject calibration feedback
 ```
 
 The current implementation exposes the API-only backend and keeps the workflow in `src.agent.workflow.RangerWorkflow`.
@@ -97,12 +98,14 @@ Seed `Task` data from TC 3-21.76 tasks such as PB-1 perimeter, PB-3 OPORD, PB-7 
 ## Data Contracts
 
 Shared IDs, provenance rules, store ownership, and drift tracking are defined in
-`docs/shared-data-contract.md`. All Systems 1, 2, and 3 integrations should use
-that document as the cross-app contract.
+`docs/shared-data-contract.md`. Doctrine RAG, weather provider, terrain provider,
+and planner-posture decisions are defined in
+`docs/doctrine-rag-weather-terrain.md`. All Systems 1, 2, and 3 integrations
+should use those documents as the cross-app contract.
 
 Inbound `IngestEnvelope` includes `envelope_id`, `instructor_id`, `platoon_id`, `mission_id`, `phase`, `timestamp_utc`, `geo`, optional `audio_b64`, `image_b64[]`, and optional `free_text`. Inbound models use Pydantic v2 with `extra="forbid"`.
 
-Outbound `ScenarioRecommendation` includes `target_soldier_id`, `rationale`, `development_edge`, `proposed_modification`, non-empty `doctrine_refs`, `safety_checks`, `estimated_duration_min`, `requires_resources`, `risk_level`, and `fairness_score`.
+Outbound `ScenarioRecommendation` includes `target_soldier_id`, `rationale`, `development_edge`, `proposed_modification`, non-empty `doctrine_refs`, `safety_checks`, `estimated_duration_min`, `requires_resources`, `risk_level`, and `fairness_score`. It also carries decision-support metadata: `decision_frame`, `decision_quality`, `value_of_information`, and `review_requirements`. `calibration_support` turns a recommendation into a bounded feedback event by naming cue tags to watch, prior signal count, outcome trend, and the feedback window.
 
 The recommendation engine is retrieval-first. It maps observations to curated
 scenario interventions keyed by task and competency, then scores candidates as:
@@ -114,7 +117,17 @@ learning_delta + doctrinal_fit + instructor_utility + novelty_bonus
 
 `ScenarioRecommendation.score_breakdown` carries those components for review,
 and `intervention_id` / `learning_objective` preserve the link to the library
-item that produced the recommendation.
+item that produced the recommendation. The deterministic decision-science layer
+then frames the choice, rates evidence and reliance risk, recommends when more
+information would be valuable, and marks review requirements such as medium-risk
+acknowledgement or high-uncertainty source review.
+
+The calibration layer treats expert judgement as learned through repeated,
+feedback-rich exposure rather than transmitted by explanation. Instructor
+feedback is stored as `CalibrationSignal` records tied to approved
+recommendations. Future recommendations use those signals to focus attention on
+observable cue tags and to raise review friction when prior outcomes for a
+similar context were negative.
 
 Canonical IDs are `soldier_id`, `patrol_id`, `mission_id`, and `platoon_id`. Do not mint local substitutes for cross-system entities.
 
@@ -125,7 +138,9 @@ Every recommendation passes through:
 - Input filter: PII/OPSEC scrub before model calls; target additions include GLiNER, Llama Guard 4 multimodal, and NeMo jailbreak rails.
 - Policy filter: weather safety, fairness counter, doctrine grounding, and roster validation.
 - Output filter: target additions include Llama Guard 4 and domain safety classifiers.
-- Human gate: instructor approve/edit/reject before emit.
+- Human gate: instructor approve/edit/reject before emit; edited approvals and
+  allowed but consequential/uncertain recommendations require a recorded
+  decision rationale and acknowledgement of review requirements.
 - Audit log: target hash-chain entry with trace id, policy outcome, model/tool calls, and decision.
 
 Failure modes to catch include cold-water immersion risk, doctrine contradiction, repeated targeting of the same soldier, hallucinated soldier names, smudged-page GO/NOGO hallucinations, precise MGRS leakage, and prompt injection in instructor input.
@@ -148,6 +163,8 @@ Versioned paths are canonical:
 | `GET` | `/v1/update-ledger` | Poll append-only observation, recommendation, and lesson-signal updates |
 | `POST` | `/v1/outbox/{event_id}/published` | Mark an integration event as published |
 | `GET` | `/v1/soldier/{id}/training-trajectory` | Read-only System 1 training trajectory projection for System 2 |
+| `POST` | `/v1/recommendations/{id}/feedback` | Record post-inject instructor calibration feedback |
+| `GET` | `/v1/soldiers/{id}/calibration-profile` | Read deterministic calibration summary by soldier |
 | `POST` | `/v1/lessons-learned` | Idempotent System 3 lesson-signal receipt keyed by `lesson_id` |
 | `GET` | `/v1/healthz` | Dependency and configuration health |
 

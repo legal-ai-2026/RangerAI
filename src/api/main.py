@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 import hashlib
 import json
@@ -11,6 +12,7 @@ from fastapi.responses import JSONResponse
 from starlette.responses import Response
 
 from src.agent.cache import redis_health
+from src.agent.calibration import build_team_calibration_profile, hydrate_calibration_signal
 from src.agent.dashboard import build_dashboard_summary
 from src.agent.entities import (
     build_graph_subgraph,
@@ -18,6 +20,7 @@ from src.agent.entities import (
     build_mission_state_summary,
     build_soldier_entity_projection,
     build_soldier_performance_report,
+    build_soldier_calibration_profile,
     build_soldier_training_trajectory,
     get_recommendation_entity,
     list_recent_recommendation_entities,
@@ -29,6 +32,8 @@ from src.config import Settings, settings
 from src.contracts import (
     ApprovalResponse,
     AuditEvent,
+    CalibrationReceipt,
+    CalibrationSignal,
     DashboardRunSummary,
     DependencyStatus,
     EntityRecommendation,
@@ -44,9 +49,11 @@ from src.contracts import (
     ReadinessReport,
     RunRecord,
     ScenarioRecommendation,
+    SoldierCalibrationProfile,
     SoldierEntityProjection,
     SoldierPerformanceReport,
     SoldierTrainingTrajectory,
+    TeamCalibrationProfile,
     UpdateLedgerEntry,
 )
 
@@ -121,6 +128,13 @@ def healthz() -> dict[str, object]:
         "openai_models": {
             "stt": settings.openai_stt_model,
             "multimodal": settings.openai_multimodal_model,
+            "extraction": settings.openai_extraction_model,
+            "reasoning": settings.openai_reasoning_model,
+        },
+        "environment_providers": {
+            "weather": settings.weather_provider,
+            "terrain": settings.terrain_provider,
+            "synthetic_fallback": settings.allow_synthetic_environment_fallback,
         },
         "infrastructure_configured": {
             "postgres": settings.postgres_configured,
@@ -147,7 +161,7 @@ async def ingest(
 ) -> RunRecord:
     trace_id = _trace_id(request)
     record = workflow.create_run(envelope, trace_id=trace_id)
-    background_tasks.add_task(workflow.process, record.run_id, trace_id)
+    background_tasks.add_task(_process_run_background, record.run_id, trace_id)
     return record
 
 
@@ -174,6 +188,21 @@ def get_mission_state(
     if summary is None:
         raise HTTPException(status_code=404, detail="mission state not found")
     return summary
+
+
+@app.get(
+    "/v1/missions/{mission_id}/team-calibration-profile",
+    response_model=TeamCalibrationProfile,
+)
+def get_mission_team_calibration_profile(
+    mission_id: str,
+    limit: int = 100,
+) -> TeamCalibrationProfile:
+    _validate_lookup_limit(limit)
+    profile = build_team_calibration_profile(store, mission_id, limit=limit)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="mission team calibration profile not found")
+    return profile
 
 
 @app.get("/v1/entities/soldiers/{soldier_id}", response_model=SoldierEntityProjection)
@@ -210,6 +239,21 @@ def get_soldier_performance(
     if report is None:
         raise HTTPException(status_code=404, detail="soldier performance not found")
     return report
+
+
+@app.get(
+    "/v1/soldiers/{soldier_id}/calibration-profile",
+    response_model=SoldierCalibrationProfile,
+)
+def get_soldier_calibration_profile(
+    soldier_id: str,
+    limit: int = 100,
+) -> SoldierCalibrationProfile:
+    _validate_lookup_limit(limit)
+    profile = build_soldier_calibration_profile(store, soldier_id, limit=limit)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="soldier calibration profile not found")
+    return profile
 
 
 @app.get("/v1/soldier/{soldier_id}/training-trajectory", response_model=SoldierTrainingTrajectory)
@@ -253,6 +297,65 @@ def get_recommendation(recommendation_id: str) -> EntityRecommendation:
     if recommendation is None:
         raise HTTPException(status_code=404, detail="recommendation not found")
     return recommendation
+
+
+@app.post(
+    "/v1/recommendations/{recommendation_id}/feedback",
+    response_model=CalibrationReceipt,
+    status_code=202,
+)
+def record_recommendation_feedback(
+    recommendation_id: str,
+    signal: CalibrationSignal,
+    request: Request,
+) -> CalibrationReceipt:
+    if signal.recommendation_id != recommendation_id:
+        raise HTTPException(status_code=422, detail="signal recommendation_id must match path")
+    entity = get_recommendation(recommendation_id)
+    if signal.run_id != entity.run_id:
+        raise HTTPException(status_code=409, detail="signal run_id does not match recommendation")
+    if entity.status != "approved":
+        raise HTTPException(status_code=409, detail="feedback requires an approved recommendation")
+
+    trace_id = _trace_id(request)
+    hydrated = hydrate_calibration_signal(signal, entity)
+    inserted = store.put_calibration_signal(hydrated)
+    source_refs = _calibration_source_refs(hydrated)
+    if inserted:
+        payload = hydrated.model_dump(mode="json")
+        store.append_update_event(
+            UpdateLedgerEntry(
+                entity_type="calibration_signal",
+                entity_id=hydrated.signal_id,
+                operation="create",
+                trace_id=trace_id,
+                patch=payload,
+                source_refs=source_refs,
+                content_hash_after=_content_hash(payload),
+            )
+        )
+        store.append_audit_event(
+            AuditEvent(
+                run_id=hydrated.run_id,
+                event_type="calibration_feedback_recorded",
+                actor_id=hydrated.instructor_id,
+                recommendation_id=hydrated.recommendation_id,
+                trace_id=trace_id,
+                payload={
+                    "signal_id": hydrated.signal_id,
+                    "outcome": hydrated.outcome,
+                    "cue_tags": [tag.value for tag in hydrated.cue_tags],
+                    "target_soldier_id": hydrated.target_soldier_id,
+                    "task_code": hydrated.task_code,
+                    "intervention_id": hydrated.intervention_id,
+                },
+            )
+        )
+    return CalibrationReceipt(
+        signal_id=hydrated.signal_id,
+        status="accepted" if inserted else "duplicate",
+        source_refs=source_refs,
+    )
 
 
 @app.get("/v1/graph/subgraph", response_model=GraphSubgraph)
@@ -333,6 +436,8 @@ def _approve_recommendation(
     run_id: str,
     recommendation_id: str,
     edited_recommendation: ScenarioRecommendation | None = None,
+    decision_rationale: str | None = None,
+    acknowledged_review_requirements: list[str] | None = None,
     trace_id: str | None = None,
 ) -> ApprovalResponse:
     try:
@@ -341,6 +446,8 @@ def _approve_recommendation(
             recommendation_id,
             approved=True,
             edited_recommendation=edited_recommendation,
+            decision_rationale=decision_rationale,
+            acknowledged_review_requirements=acknowledged_review_requirements,
             trace_id=trace_id,
         )
     except KeyError as exc:
@@ -352,6 +459,8 @@ def _approve_recommendation(
 def _reject_recommendation(
     run_id: str,
     recommendation_id: str,
+    decision_rationale: str | None = None,
+    acknowledged_review_requirements: list[str] | None = None,
     trace_id: str | None = None,
 ) -> ApprovalResponse:
     try:
@@ -359,6 +468,8 @@ def _reject_recommendation(
             run_id,
             recommendation_id,
             approved=False,
+            decision_rationale=decision_rationale,
+            acknowledged_review_requirements=acknowledged_review_requirements,
             trace_id=trace_id,
         )
     except KeyError as exc:
@@ -370,18 +481,35 @@ def _reject_recommendation(
 def _approve_recommendation_by_id(
     recommendation_id: str,
     edited_recommendation: ScenarioRecommendation | None = None,
+    decision_rationale: str | None = None,
+    acknowledged_review_requirements: list[str] | None = None,
     trace_id: str | None = None,
 ) -> ApprovalResponse:
     run_id = _run_id_for_recommendation(recommendation_id)
-    return _approve_recommendation(run_id, recommendation_id, edited_recommendation, trace_id)
+    return _approve_recommendation(
+        run_id,
+        recommendation_id,
+        edited_recommendation,
+        decision_rationale,
+        acknowledged_review_requirements,
+        trace_id,
+    )
 
 
 def _reject_recommendation_by_id(
     recommendation_id: str,
+    decision_rationale: str | None = None,
+    acknowledged_review_requirements: list[str] | None = None,
     trace_id: str | None = None,
 ) -> ApprovalResponse:
     run_id = _run_id_for_recommendation(recommendation_id)
-    return _reject_recommendation(run_id, recommendation_id, trace_id)
+    return _reject_recommendation(
+        run_id,
+        recommendation_id,
+        decision_rationale,
+        acknowledged_review_requirements,
+        trace_id,
+    )
 
 
 @app.post("/v1/recommendations/{recommendation_id}/decision", response_model=ApprovalResponse)
@@ -395,9 +523,16 @@ def decide_recommendation(
         return _approve_recommendation_by_id(
             recommendation_id,
             decision.edited_recommendation,
+            decision.decision_rationale,
+            decision.acknowledged_review_requirements,
             trace_id,
         )
-    return _reject_recommendation_by_id(recommendation_id, trace_id)
+    return _reject_recommendation_by_id(
+        recommendation_id,
+        decision.decision_rationale,
+        decision.acknowledged_review_requirements,
+        trace_id,
+    )
 
 
 def _run_id_for_recommendation(recommendation_id: str) -> str:
@@ -432,6 +567,10 @@ def _trace_id(request: Request) -> str:
     return trace_id
 
 
+def _process_run_background(run_id: str, trace_id: str | None) -> None:
+    asyncio.run(workflow.process(run_id, trace_id))
+
+
 def _provider_status() -> dict[str, bool]:
     return {
         "anthropic": bool(settings.anthropic_api_key),
@@ -439,6 +578,7 @@ def _provider_status() -> dict[str, bool]:
         "deepgram": bool(settings.deepgram_api_key),
         "mistral": bool(settings.mistral_api_key),
         "openweather": bool(settings.openweather_api_key),
+        "nws": bool(settings.nws_user_agent),
     }
 
 
@@ -461,6 +601,8 @@ def _readiness_report() -> ReadinessReport:
         openai_models={
             "stt": settings.openai_stt_model,
             "multimodal": settings.openai_multimodal_model,
+            "extraction": settings.openai_extraction_model,
+            "reasoning": settings.openai_reasoning_model,
         },
     )
 
@@ -472,6 +614,15 @@ def _lesson_source_refs(lesson: LessonsLearnedSignal) -> list[str]:
         f"postgres://ranger_runs/{run_id}#record.recommendations"
         for run_id in _run_ids_for_recommendations(lesson.recommendation_ids)
     )
+    return sorted(set(refs))
+
+
+def _calibration_source_refs(signal: CalibrationSignal) -> list[str]:
+    refs = [
+        f"postgres://ranger_calibration_signals/{signal.signal_id}",
+        f"postgres://ranger_runs/{signal.run_id}#record.recommendations",
+    ]
+    refs.extend(ref.ref for ref in signal.evidence_refs)
     return sorted(set(refs))
 
 

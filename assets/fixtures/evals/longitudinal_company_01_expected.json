@@ -1,0 +1,191 @@
+{
+  "fixture_id": "longitudinal_company_01",
+  "observations": [
+    {
+      "envelope_id": "long-001",
+      "soldier_id": "Jones",
+      "task_code": "MV-2",
+      "rating": "NOGO"
+    },
+    {
+      "envelope_id": "long-001",
+      "soldier_id": "Smith",
+      "task_code": "MV-2",
+      "rating": "GO"
+    },
+    {
+      "envelope_id": "long-001",
+      "soldier_id": "Garcia",
+      "task_code": "MV-2",
+      "rating": "GO"
+    },
+    {
+      "envelope_id": "long-002",
+      "soldier_id": "Jones",
+      "task_code": "MV-2",
+      "rating": "GO"
+    },
+    {
+      "envelope_id": "long-002",
+      "soldier_id": "Smith",
+      "task_code": "PB-7",
+      "rating": "NOGO"
+    },
+    {
+      "envelope_id": "long-002",
+      "soldier_id": "Garcia",
+      "task_code": "PB-7",
+      "rating": "GO"
+    },
+    {
+      "envelope_id": "long-003",
+      "soldier_id": "Jones",
+      "task_code": "MV-2",
+      "rating": "GO"
+    },
+    {
+      "envelope_id": "long-003",
+      "soldier_id": "Smith",
+      "task_code": "PB-7",
+      "rating": "GO"
+    },
+    {
+      "envelope_id": "long-003",
+      "soldier_id": "Garcia",
+      "task_code": "AM-4",
+      "rating": "NOGO"
+    },
+    {
+      "envelope_id": "long-004",
+      "soldier_id": "Jones",
+      "task_code": "MV-2",
+      "rating": "GO"
+    },
+    {
+      "envelope_id": "long-004",
+      "soldier_id": "Smith",
+      "task_code": "PB-7",
+      "rating": "GO"
+    },
+    {
+      "envelope_id": "long-004",
+      "soldier_id": "Garcia",
+      "task_code": "AM-4",
+      "rating": "NOGO"
+    },
+    {
+      "envelope_id": "long-005",
+      "soldier_id": "Taylor",
+      "task_code": "MV-2",
+      "rating": "NOGO"
+    },
+    {
+      "envelope_id": "long-005",
+      "soldier_id": "Nguyen",
+      "task_code": "MV-2",
+      "rating": "GO"
+    },
+    {
+      "envelope_id": "long-005",
+      "soldier_id": "Patel",
+      "task_code": "MV-2",
+      "rating": "GO"
+    },
+    {
+      "envelope_id": "long-006",
+      "soldier_id": "Taylor",
+      "task_code": "MV-2",
+      "rating": "GO"
+    },
+    {
+      "envelope_id": "long-006",
+      "soldier_id": "Nguyen",
+      "task_code": "PB-7",
+      "rating": "NOGO"
+    },
+    {
+      "envelope_id": "long-006",
+      "soldier_id": "Patel",
+      "task_code": "PB-7",
+      "rating": "GO"
+    },
+    {
+      "envelope_id": "long-007",
+      "soldier_id": "Taylor",
+      "task_code": "MV-2",
+      "rating": "GO"
+    },
+    {
+      "envelope_id": "long-007",
+      "soldier_id": "Nguyen",
+      "task_code": "PB-7",
+      "rating": "GO"
+    },
+    {
+      "envelope_id": "long-007",
+      "soldier_id": "Patel",
+      "task_code": "AM-4",
+      "rating": "NOGO"
+    },
+    {
+      "envelope_id": "long-008",
+      "soldier_id": "Taylor",
+      "task_code": "MV-2",
+      "rating": "GO"
+    },
+    {
+      "envelope_id": "long-008",
+      "soldier_id": "Nguyen",
+      "task_code": "PB-7",
+      "rating": "GO"
+    },
+    {
+      "envelope_id": "long-008",
+      "soldier_id": "Patel",
+      "task_code": "AM-4",
+      "rating": "NOGO"
+    }
+  ],
+  "recommendation_opportunities": [
+    {
+      "envelope_id": "long-001",
+      "target_soldier_id": "Jones",
+      "intervention_id": "comm_degraded_sitrep"
+    },
+    {
+      "envelope_id": "long-002",
+      "target_soldier_id": "Smith",
+      "intervention_id": "security_priorities_reset"
+    },
+    {
+      "envelope_id": "long-003",
+      "target_soldier_id": "Garcia",
+      "intervention_id": "fire_control_rehearsal"
+    },
+    {
+      "envelope_id": "long-004",
+      "target_soldier_id": "Garcia",
+      "intervention_id": "fire_control_rehearsal"
+    },
+    {
+      "envelope_id": "long-005",
+      "target_soldier_id": "Taylor",
+      "intervention_id": "comm_degraded_sitrep"
+    },
+    {
+      "envelope_id": "long-006",
+      "target_soldier_id": "Nguyen",
+      "intervention_id": "security_priorities_reset"
+    },
+    {
+      "envelope_id": "long-007",
+      "target_soldier_id": "Patel",
+      "intervention_id": "fire_control_rehearsal"
+    },
+    {
+      "envelope_id": "long-008",
+      "target_soldier_id": "Patel",
+      "intervention_id": "fire_control_rehearsal"
+    }
+  ]
+}

@@ -97,6 +97,16 @@ FATIGUE_TERMS = (
     "nutrition",
 )
 
+UNCERTAINTY_TERMS = (
+    "unclear",
+    "uncertain",
+    "smudged",
+    "illegible",
+    "unknown",
+    "maybe",
+    "possibly",
+)
+
 
 def draft_intervention_recommendations(
     observations: list[Observation],
@@ -176,7 +186,9 @@ def _score_observation(
     learning_delta = {"NOGO": 0.9, "GO": 0.45, "UNCERTAIN": 0.25}[observation.rating]
     doctrinal_fit = 0.95 if observation.task_code in template.task_codes else 0.7
     instructor_utility = 0.9 if observation.rating == "NOGO" else 0.65
+    observability = _observability(observation, template)
     novelty_bonus = 0.2 if edge_counts[template.development_edge] == 0 else 0.05
+    uncertainty_penalty = _uncertainty_penalty(observation)
     fairness_penalty = min(1.0, soldier_counts[observation.soldier_id] * 0.25)
     repetition_penalty = min(
         1.0,
@@ -187,9 +199,11 @@ def _score_observation(
         learning_delta
         + doctrinal_fit
         + instructor_utility
+        + (observability * 0.2)
         + novelty_bonus
         - safety_risk
         - fatigue
+        - uncertainty_penalty
         - fairness_penalty
         - repetition_penalty
     )
@@ -197,9 +211,11 @@ def _score_observation(
         learning_delta=learning_delta,
         doctrinal_fit=doctrinal_fit,
         instructor_utility=instructor_utility,
+        observability=observability,
         novelty_bonus=novelty_bonus,
         safety_risk=round(safety_risk, 2),
         fatigue_overload=fatigue,
+        uncertainty_penalty=uncertainty_penalty,
         fairness_penalty=fairness_penalty,
         repetition_penalty=repetition_penalty,
         total=round(total, 3),
@@ -216,6 +232,16 @@ def _recommendation_from_template(
         "No immersion, live-fire, unsupervised movement, or punitive physical load added.",
         "Instructor may downgrade or cancel the inject if fatigue, cold, heat, or terrain risk rises.",
     ]
+    evidence_summary = (
+        f"{observation.soldier_id} was observed with a {observation.rating} rating on "
+        f"{observation.task_code}: {observation.note[:180]}"
+    )
+    why_now = (
+        "The next repetition can make the same task behavior observable while the event is "
+        "fresh and before the patrol normalizes the gap."
+    )
+    expected_learning_signal = template.learning_objective
+    risk_controls = " ".join(safety_checks)
     return ScenarioRecommendation(
         target_soldier_id=observation.soldier_id,
         rationale=(
@@ -235,6 +261,11 @@ def _recommendation_from_template(
         risk_level=RiskLevel.medium if score.fatigue_overload >= 0.25 else RiskLevel.low,
         fairness_score=max(0.0, round(1.0 - score.fairness_penalty, 2)),
         target_ids=TargetIds(soldier_id=observation.soldier_id, task_code=observation.task_code),
+        evidence_summary=evidence_summary,
+        why_now=why_now,
+        expected_learning_signal=expected_learning_signal,
+        risk_controls=risk_controls,
+        uncertainty_refs=list(observation.uncertainty_refs),
         intervention_id=template.intervention_id,
         learning_objective=template.learning_objective,
         score_breakdown=score,
@@ -246,3 +277,32 @@ def _fatigue_overload(observation: Observation) -> float:
     if any(term in note for term in FATIGUE_TERMS):
         return 0.28
     return 0.05
+
+
+def _observability(observation: Observation, template: InterventionTemplate) -> float:
+    score = 0.35
+    if observation.task_code != "UNMAPPED":
+        score += 0.2
+    if observation.task_code in template.task_codes:
+        score += 0.15
+    if len(observation.note.strip()) >= 40:
+        score += 0.15
+    if observation.source in {"audio", "image", "free_text"}:
+        score += 0.1
+    if observation.rating in {"GO", "NOGO"}:
+        score += 0.05
+    return round(min(1.0, score), 2)
+
+
+def _uncertainty_penalty(observation: Observation) -> float:
+    penalty = 0.0
+    if observation.confidence is not None:
+        penalty += max(0.0, 0.7 - observation.confidence)
+    if observation.rating == "UNCERTAIN":
+        penalty += 0.4
+    note = observation.note.lower()
+    if any(term in note for term in UNCERTAINTY_TERMS):
+        penalty += 0.25
+    if observation.uncertainty_refs:
+        penalty += min(0.35, len(observation.uncertainty_refs) * 0.12)
+    return round(min(1.0, penalty), 2)

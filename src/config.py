@@ -3,13 +3,24 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
-from src.agent.models import MODEL_CLAUDE_SONNET, MODEL_OPENAI_MULTIMODAL, MODEL_OPENAI_WHISPER
+from src.agent.models import (
+    MODEL_CLAUDE_SONNET,
+    MODEL_OPENAI_MULTIMODAL,
+    MODEL_OPENAI_REASONING,
+    MODEL_OPENAI_WHISPER,
+)
 
 
 def csv_env(value: str | None) -> tuple[str, ...]:
     if not value:
         return ()
     return tuple(item.strip() for item in value.split(",") if item.strip())
+
+
+def bool_env(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def psycopg_dsn(url: str | None) -> str | None:
@@ -31,6 +42,11 @@ class Settings:
     anthropic_model: str = os.getenv("ANTHROPIC_MODEL", MODEL_CLAUDE_SONNET)
     openai_api_key: str | None = field(default=os.getenv("OPENAI_API_KEY"), repr=False)
     openai_multimodal_model: str = os.getenv("OPENAI_MULTIMODAL_MODEL", MODEL_OPENAI_MULTIMODAL)
+    openai_extraction_model: str = os.getenv(
+        "OPENAI_EXTRACTION_MODEL",
+        os.getenv("OPENAI_REASONING_MODEL", MODEL_OPENAI_REASONING),
+    )
+    openai_reasoning_model: str = os.getenv("OPENAI_REASONING_MODEL", MODEL_OPENAI_REASONING)
     openai_stt_model: str = os.getenv("OPENAI_STT_MODEL", MODEL_OPENAI_WHISPER)
     deepgram_api_key: str | None = field(default=os.getenv("DEEPGRAM_API_KEY"), repr=False)
     mistral_api_key: str | None = field(default=os.getenv("MISTRAL_API_KEY"), repr=False)
@@ -59,6 +75,14 @@ class Settings:
     langfuse_public_key: str | None = field(default=os.getenv("LANGFUSE_PUBLIC_KEY"), repr=False)
     langfuse_secret_key: str | None = field(default=os.getenv("LANGFUSE_SECRET_KEY"), repr=False)
     langfuse_host: str | None = os.getenv("LANGFUSE_HOST")
+    weather_provider: str = os.getenv("WEATHER_PROVIDER", "synthetic")
+    terrain_provider: str = os.getenv("TERRAIN_PROVIDER", "synthetic")
+    nws_user_agent: str | None = os.getenv("NWS_USER_AGENT")
+    environment_timeout_seconds: float = float(os.getenv("ENVIRONMENT_TIMEOUT_SECONDS", "3"))
+    allow_synthetic_environment_fallback: bool = bool_env(
+        os.getenv("ALLOW_SYNTHETIC_ENVIRONMENT_FALLBACK"),
+        True,
+    )
 
     @property
     def postgres_configured(self) -> bool:

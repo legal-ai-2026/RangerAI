@@ -51,6 +51,13 @@ def main() -> int:
         {"decision": "approve"},
     )
     recommendation_detail = client.request("GET", f"/v1/recommendations/{recommendation_id}")
+    detail = recommendation_detail["recommendation"]
+    if not detail.get("evidence_summary"):
+        raise SmokeFailure("recommendation detail missing evidence_summary")
+    if not detail.get("model_context_refs"):
+        raise SmokeFailure("recommendation detail missing model_context_refs")
+    if not detail.get("score_breakdown"):
+        raise SmokeFailure("recommendation detail missing score_breakdown")
     graph = client.request("GET", "/v1/graph/subgraph?mission_id=m-smoke")
     performance = client.request("GET", "/v1/soldiers/Jones/performance")
     trajectory = client.request("GET", "/v1/soldier/Jones/training-trajectory")
@@ -75,6 +82,9 @@ def main() -> int:
                 "mission_state_observations": mission_state["total_observations"],
                 "decision": decision["status"],
                 "recommendation_detail_status": recommendation_detail["status"],
+                "recommendation_has_evidence_summary": bool(detail.get("evidence_summary")),
+                "recommendation_has_model_context_refs": bool(detail.get("model_context_refs")),
+                "recommendation_has_score_breakdown": bool(detail.get("score_breakdown")),
                 "graph_nodes": len(graph["nodes"]),
                 "graph_edges": len(graph["edges"]),
                 "approved_recommendations": len(performance["approved_recommendations"]),

@@ -4,12 +4,14 @@ import pytest
 from pydantic import ValidationError
 
 from src.contracts import (
+    DecisionQuality,
     DevelopmentEdge,
     EvidenceRef,
     GeoPoint,
     IngestEnvelope,
     LessonsLearnedSignal,
     Phase,
+    RecommendationScore,
     RecommendationDecision,
     RiskLevel,
     ScenarioRecommendation,
@@ -31,21 +33,23 @@ def test_ingest_rejects_missing_payload() -> None:
 
 def test_ingest_forbids_extra_fields() -> None:
     with pytest.raises(ValidationError):
-        IngestEnvelope(
-            instructor_id="ri-1",
-            platoon_id="plt-1",
-            mission_id="m-1",
-            phase=Phase.mountain,
-            timestamp_utc=datetime.now(timezone.utc),
-            geo=GeoPoint(lat=35.0, lon=-83.0, grid_mgrs="17S"),
-            free_text="Jones blew Phase Line Bird",
-            unexpected=True,
+        IngestEnvelope.model_validate(
+            {
+                "instructor_id": "ri-1",
+                "platoon_id": "plt-1",
+                "mission_id": "m-1",
+                "phase": Phase.mountain,
+                "timestamp_utc": datetime.now(timezone.utc),
+                "geo": GeoPoint(lat=35.0, lon=-83.0, grid_mgrs="17S"),
+                "free_text": "Jones blew Phase Line Bird",
+                "unexpected": True,
+            }
         )
 
 
 def test_recommendation_decision_rejects_unknown_action() -> None:
     with pytest.raises(ValidationError):
-        RecommendationDecision(decision="defer")
+        RecommendationDecision.model_validate({"decision": "defer"})
 
 
 def test_recommendation_decision_rejects_edit_without_approval() -> None:
@@ -100,3 +104,47 @@ def test_recommendation_carries_cross_system_provenance() -> None:
     assert recommendation.target_ids.mission_id == "m-1"
     assert recommendation.evidence_refs[0].role == "primary_observation"
     assert recommendation.created_at_utc.tzinfo is not None
+
+
+def test_legacy_score_breakdown_defaults_new_uncertainty_fields() -> None:
+    score = RecommendationScore.model_validate(
+        {
+            "learning_delta": 0.8,
+            "doctrinal_fit": 0.9,
+            "instructor_utility": 0.7,
+            "novelty_bonus": 0.1,
+            "safety_risk": 0.1,
+            "fatigue_overload": 0.1,
+            "fairness_penalty": 0.0,
+            "repetition_penalty": 0.0,
+            "total": 2.3,
+        }
+    )
+
+    assert score.observability == 0.0
+    assert score.uncertainty_penalty == 0.0
+
+
+def test_decision_quality_forbids_out_of_range_scores() -> None:
+    with pytest.raises(ValidationError):
+        DecisionQuality(
+            information_quality=1.2,
+            safety_margin=1.0,
+            fairness_margin=1.0,
+            observability=0.8,
+            learning_utility=0.8,
+            reliance_risk=0.1,
+            overall=0.8,
+            rating="strong",
+        )
+
+
+def test_recommendation_decision_accepts_rationale_and_acknowledgements() -> None:
+    decision = RecommendationDecision(
+        decision="approve",
+        decision_rationale="Instructor reviewed the cited evidence and accepts the risk controls.",
+        acknowledged_review_requirements=["medium_risk_ack"],
+    )
+
+    assert decision.decision_rationale is not None
+    assert decision.acknowledged_review_requirements == ["medium_risk_ack"]

@@ -6,6 +6,7 @@ from typing import Any, Protocol
 from src.config import Settings, settings
 from src.contracts import (
     AuditEvent,
+    CalibrationSignal,
     LessonsLearnedSignal,
     OutboxEvent,
     RunRecord,
@@ -53,6 +54,19 @@ class RunStore(Protocol):
 
     def get_lesson_signal(self, lesson_id: str) -> LessonsLearnedSignal | None: ...
 
+    def put_calibration_signal(self, signal: CalibrationSignal) -> bool: ...
+
+    def get_calibration_signal(self, signal_id: str) -> CalibrationSignal | None: ...
+
+    def list_calibration_signals(
+        self,
+        target_soldier_id: str | None = None,
+        recommendation_id: str | None = None,
+        run_id: str | None = None,
+        task_code: str | None = None,
+        limit: int = 100,
+    ) -> list[CalibrationSignal]: ...
+
 
 @dataclass
 class InMemoryRunStore:
@@ -61,6 +75,7 @@ class InMemoryRunStore:
     outbox_events: dict[str, list[OutboxEvent]] = field(default_factory=dict)
     update_events: list[UpdateLedgerEntry] = field(default_factory=list)
     lesson_signals: dict[str, LessonsLearnedSignal] = field(default_factory=dict)
+    calibration_signals: dict[str, CalibrationSignal] = field(default_factory=dict)
 
     def put(self, record: RunRecord) -> None:
         self.records[record.run_id] = record
@@ -162,6 +177,40 @@ class InMemoryRunStore:
 
     def get_lesson_signal(self, lesson_id: str) -> LessonsLearnedSignal | None:
         return self.lesson_signals.get(lesson_id)
+
+    def put_calibration_signal(self, signal: CalibrationSignal) -> bool:
+        if signal.signal_id in self.calibration_signals:
+            return False
+        self.calibration_signals[signal.signal_id] = signal
+        return True
+
+    def get_calibration_signal(self, signal_id: str) -> CalibrationSignal | None:
+        return self.calibration_signals.get(signal_id)
+
+    def list_calibration_signals(
+        self,
+        target_soldier_id: str | None = None,
+        recommendation_id: str | None = None,
+        run_id: str | None = None,
+        task_code: str | None = None,
+        limit: int = 100,
+    ) -> list[CalibrationSignal]:
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+        signals = list(self.calibration_signals.values())
+        if target_soldier_id is not None:
+            signals = [
+                signal for signal in signals if signal.target_soldier_id == target_soldier_id
+            ]
+        if recommendation_id is not None:
+            signals = [
+                signal for signal in signals if signal.recommendation_id == recommendation_id
+            ]
+        if run_id is not None:
+            signals = [signal for signal in signals if signal.run_id == run_id]
+        if task_code is not None:
+            signals = [signal for signal in signals if signal.task_code == task_code]
+        return sorted(signals, key=lambda signal: signal.occurred_at_utc, reverse=True)[:limit]
 
 
 @dataclass
@@ -602,6 +651,93 @@ class PostgresRunStore:
             return None
         return _lesson_signal_from_payload(row[0])
 
+    def put_calibration_signal(self, signal: CalibrationSignal) -> bool:
+        from psycopg.types.json import Jsonb
+
+        with self._connect() as conn:
+            self._ensure_schema(conn)
+            result = conn.execute(
+                """
+                INSERT INTO ranger_calibration_signals (
+                    signal_id,
+                    recommendation_id,
+                    run_id,
+                    target_soldier_id,
+                    task_code,
+                    intervention_id,
+                    outcome,
+                    payload,
+                    occurred_at_utc,
+                    created_at_utc
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+                ON CONFLICT (signal_id) DO NOTHING
+                """,
+                (
+                    signal.signal_id,
+                    signal.recommendation_id,
+                    signal.run_id,
+                    signal.target_soldier_id,
+                    signal.task_code,
+                    signal.intervention_id,
+                    signal.outcome,
+                    Jsonb(signal.model_dump(mode="json")),
+                    signal.occurred_at_utc,
+                ),
+            )
+        return result.rowcount > 0
+
+    def get_calibration_signal(self, signal_id: str) -> CalibrationSignal | None:
+        with self._connect() as conn:
+            self._ensure_schema(conn)
+            row = conn.execute(
+                "SELECT payload FROM ranger_calibration_signals WHERE signal_id = %s",
+                (signal_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return _calibration_signal_from_payload(row[0])
+
+    def list_calibration_signals(
+        self,
+        target_soldier_id: str | None = None,
+        recommendation_id: str | None = None,
+        run_id: str | None = None,
+        task_code: str | None = None,
+        limit: int = 100,
+    ) -> list[CalibrationSignal]:
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+        filters: list[str] = []
+        params: list[object] = []
+        if target_soldier_id is not None:
+            filters.append("target_soldier_id = %s")
+            params.append(target_soldier_id)
+        if recommendation_id is not None:
+            filters.append("recommendation_id = %s")
+            params.append(recommendation_id)
+        if run_id is not None:
+            filters.append("run_id = %s")
+            params.append(run_id)
+        if task_code is not None:
+            filters.append("task_code = %s")
+            params.append(task_code)
+        where_clause = "WHERE " + " AND ".join(filters) if filters else ""
+        params.append(limit)
+        with self._connect() as conn:
+            self._ensure_schema(conn)
+            rows = conn.execute(
+                f"""
+                SELECT payload
+                FROM ranger_calibration_signals
+                {where_clause}
+                ORDER BY occurred_at_utc DESC
+                LIMIT %s
+                """,
+                params,
+            ).fetchall()
+        return [_calibration_signal_from_payload(row[0]) for row in rows]
+
     def _connect(self) -> Any:
         import psycopg
 
@@ -721,6 +857,40 @@ class PostgresRunStore:
             ON ranger_lesson_signals (source_system, created_at_utc)
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ranger_calibration_signals (
+                signal_id text PRIMARY KEY,
+                recommendation_id text NOT NULL,
+                run_id text NOT NULL,
+                target_soldier_id text,
+                task_code text,
+                intervention_id text,
+                outcome text NOT NULL,
+                payload jsonb NOT NULL,
+                occurred_at_utc timestamptz NOT NULL,
+                created_at_utc timestamptz NOT NULL DEFAULT now()
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS ranger_calibration_signals_target_idx
+            ON ranger_calibration_signals (target_soldier_id, occurred_at_utc)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS ranger_calibration_signals_recommendation_idx
+            ON ranger_calibration_signals (recommendation_id, occurred_at_utc)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS ranger_calibration_signals_run_idx
+            ON ranger_calibration_signals (run_id, occurred_at_utc)
+            """
+        )
         self._schema_ready = True
 
 
@@ -740,6 +910,12 @@ def _lesson_signal_from_payload(payload: Any) -> LessonsLearnedSignal:
     if isinstance(payload, str):
         return LessonsLearnedSignal.model_validate_json(payload)
     return LessonsLearnedSignal.model_validate(payload)
+
+
+def _calibration_signal_from_payload(payload: Any) -> CalibrationSignal:
+    if isinstance(payload, str):
+        return CalibrationSignal.model_validate_json(payload)
+    return CalibrationSignal.model_validate(payload)
 
 
 def _record_mentions_soldier(record: RunRecord, soldier_id: str) -> bool:

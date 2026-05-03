@@ -84,6 +84,18 @@ Add prompt regression tests under `tests/prompts/` before changing guardrails or
 | Reliable | Uncertain OCR stays reviewable and should not silently enter the KG. |
 | Governable | Approval and rejection are explicit API actions. |
 
+Decision-science metadata is mandatory for recommendations. It must frame the
+decision, expose evidence quality and reliance risk, identify value of
+information, and require instructor rationale for edited, uncertain, or
+medium-risk approvals. It never bypasses policy filtering or instructor
+approval.
+
+Calibration metadata is also part of the recommendation contract. The system
+should use approved recommendation feedback to focus future instructor attention
+on observable cues and to add review friction when similar injects have negative
+outcomes. Do not treat calibration as autonomous retraining or as permission to
+bypass instructor judgement.
+
 ## Cross-System Reminders
 
 - Inbound from System 3: `POST /v1/lessons-learned` is idempotent on `lesson_id`.

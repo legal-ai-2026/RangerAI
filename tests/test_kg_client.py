@@ -12,8 +12,9 @@ class FakeGraph:
     def __init__(self) -> None:
         self.queries: list[tuple[str, dict[str, object]]] = []
 
-    def query(self, query: str, params: dict[str, object] | None = None) -> None:
+    def query(self, query: str, params: dict[str, object] | None = None) -> object | None:
         self.queries.append((query, params or {}))
+        return None
 
 
 class FakeQueryResult:

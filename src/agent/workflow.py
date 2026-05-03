@@ -6,6 +6,11 @@ from typing import Any, Literal, cast
 from uuid import uuid4
 
 from src.agent.cache import RunLease, build_run_lease
+from src.agent.calibration import attach_calibration_support
+from src.agent.decision_science import (
+    approval_requires_rationale,
+    missing_review_acknowledgements,
+)
 from src.agent.graph import (
     RangerState,
     build_ranger_graph,
@@ -150,6 +155,8 @@ class RangerWorkflow:
         recommendation_id: str,
         approved: bool,
         edited_recommendation: ScenarioRecommendation | None = None,
+        decision_rationale: str | None = None,
+        acknowledged_review_requirements: list[str] | None = None,
         trace_id: str | None = None,
     ) -> ApprovalResponse:
         if edited_recommendation is not None and not approved:
@@ -169,6 +176,13 @@ class RangerWorkflow:
                 if item.recommendation.recommendation_id == recommendation_id:
                     if item.status == "blocked" and approved:
                         raise ValueError("blocked recommendations cannot be approved")
+                    if approved:
+                        _validate_stored_review_requirements(
+                            item.recommendation,
+                            decision_rationale=decision_rationale,
+                            acknowledged_review_requirements=acknowledged_review_requirements or [],
+                            edited=edited_recommendation is not None,
+                        )
                     break
             else:
                 raise KeyError(f"recommendation {recommendation_id} not found")
@@ -176,7 +190,10 @@ class RangerWorkflow:
             resume_payload: dict[str, object] = {
                 "recommendation_id": recommendation_id,
                 "decision": "approve" if approved else "reject",
+                "acknowledged_review_requirements": list(acknowledged_review_requirements or []),
             }
+            if decision_rationale is not None:
+                resume_payload["decision_rationale"] = decision_rationale
             if edited_recommendation is not None:
                 resume_payload["edited_recommendation"] = edited_recommendation.model_dump(
                     mode="json"
@@ -198,6 +215,8 @@ class RangerWorkflow:
                         run_id=run_id,
                         recommendation=item.recommendation,
                         status=decision_status,
+                        decision_rationale=decision_rationale,
+                        acknowledged_review_requirements=acknowledged_review_requirements or [],
                         trace_id=trace_id,
                     )
                     self.store.append_update_event(recommendation_update)
@@ -211,6 +230,10 @@ class RangerWorkflow:
                             payload={
                                 "status": decision_status,
                                 "edited": edited_recommendation is not None,
+                                "decision_rationale": decision_rationale,
+                                "acknowledged_review_requirements": list(
+                                    acknowledged_review_requirements or []
+                                ),
                             },
                         )
                     )
@@ -239,6 +262,19 @@ class RangerWorkflow:
                                 "model_context_refs": list(item.recommendation.model_context_refs),
                                 "policy_refs": list(item.recommendation.policy_refs),
                                 "edited": edited_recommendation is not None,
+                                "decision_rationale": decision_rationale,
+                                "acknowledged_review_requirements": list(
+                                    acknowledged_review_requirements or []
+                                ),
+                                "decision_quality": item.recommendation.decision_quality.model_dump(
+                                    mode="json"
+                                )
+                                if item.recommendation.decision_quality
+                                else None,
+                                "review_requirements": [
+                                    requirement.model_dump(mode="json")
+                                    for requirement in item.recommendation.review_requirements
+                                ],
                             },
                         )
                     )
@@ -268,7 +304,10 @@ class RangerWorkflow:
         record.ocr_pages = state.get("ocr_pages", [])
         record.observations = state.get("observations", [])
         record.kg_write_summary = state.get("kg_write_summary", {})
-        record.recommendations = state.get("recommendations", [])
+        record.recommendations = attach_calibration_support(
+            state.get("recommendations", []),
+            self.store,
+        )
         record.errors = state.get("errors", [])
         record.status = state.get("status", record.status)
         self.store.put(record)
@@ -325,10 +364,33 @@ def _observation_update_event(
     )
 
 
+def _validate_stored_review_requirements(
+    recommendation: ScenarioRecommendation,
+    *,
+    decision_rationale: str | None,
+    acknowledged_review_requirements: list[str],
+    edited: bool,
+) -> None:
+    missing = missing_review_acknowledgements(
+        recommendation,
+        acknowledged_review_requirements,
+    )
+    if missing:
+        raise ValueError("approval missing acknowledged review requirements: " + ", ".join(missing))
+    if (
+        not edited
+        and approval_requires_rationale(recommendation, edited=edited)
+        and not decision_rationale
+    ):
+        raise ValueError("approval requires a decision_rationale")
+
+
 def _recommendation_update_event(
     run_id: str,
     recommendation: ScenarioRecommendation,
     status: Literal["approved", "rejected"],
+    decision_rationale: str | None = None,
+    acknowledged_review_requirements: list[str] | None = None,
     trace_id: str | None = None,
 ) -> UpdateLedgerEntry:
     patch: dict[str, object] = {
@@ -339,6 +401,15 @@ def _recommendation_update_event(
         "evidence_refs": [ref.model_dump(mode="json") for ref in recommendation.evidence_refs],
         "model_context_refs": list(recommendation.model_context_refs),
         "policy_refs": list(recommendation.policy_refs),
+        "decision_rationale": decision_rationale,
+        "acknowledged_review_requirements": list(acknowledged_review_requirements or []),
+        "decision_quality": recommendation.decision_quality.model_dump(mode="json")
+        if recommendation.decision_quality
+        else None,
+        "review_requirements": [
+            requirement.model_dump(mode="json")
+            for requirement in recommendation.review_requirements
+        ],
     }
     operation: Literal["approve", "reject"] = "approve" if status == "approved" else "reject"
     return UpdateLedgerEntry(

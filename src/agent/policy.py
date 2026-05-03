@@ -1,8 +1,25 @@
 from __future__ import annotations
 
+import re
 from collections import Counter
 
 from src.contracts import Observation, PolicyDecision, RiskLevel, ScenarioRecommendation
+
+UNSAFE_COLD_WATER_TERMS = (
+    "chest-deep",
+    "cold-water",
+    "cold water",
+    "submerge",
+    "hypothermia",
+)
+
+UNSUPPORTED_AUTHORITY_TERMS = (
+    "punish",
+    "punitive",
+    "smoke session",
+    "corrective physical training",
+    "unapproved stress",
+)
 
 
 class PolicyEngine:
@@ -14,10 +31,36 @@ class PolicyEngine:
         reasons: list[str] = []
         if recommendation.target_soldier_id not in self.roster:
             reasons.append("target soldier is not in the roster")
-        if recommendation.risk_level is RiskLevel.high:
+        if recommendation.risk_level == RiskLevel.high:
             reasons.append("high-risk recommendations require manual replanning")
-        if any("chest-deep" in item.lower() for item in recommendation.safety_checks):
+        review_text = " ".join(
+            [
+                recommendation.rationale,
+                recommendation.proposed_modification,
+                *recommendation.safety_checks,
+                recommendation.risk_controls or "",
+            ]
+        ).lower()
+        unsafe_immersion = (
+            "immersion" in review_text
+            and "no immersion" not in review_text
+            and "without immersion" not in review_text
+        )
+        if any(term in review_text for term in UNSAFE_COLD_WATER_TERMS) or unsafe_immersion:
             reasons.append("unsafe cold-water or immersion condition detected")
+        if _contains_unnegated_term(review_text, UNSUPPORTED_AUTHORITY_TERMS):
+            reasons.append("unsupported instructor authority or punitive language detected")
+        if recommendation.doctrine_refs and not any(
+            ref.startswith("TC 3-21.76") for ref in recommendation.doctrine_refs
+        ):
+            reasons.append("unsupported doctrine authority detected")
+        if "policy:phase-mismatch" in recommendation.policy_refs:
+            reasons.append("unsupported phase mismatch detected")
+        if recommendation.score_breakdown is not None:
+            if recommendation.score_breakdown.uncertainty_penalty >= 0.75:
+                reasons.append("observation uncertainty exceeds display threshold")
+            if recommendation.score_breakdown.observability <= 0.2:
+                reasons.append("recommendation lacks observable evaluation signal")
 
         projected = self.curveballs.copy()
         projected[recommendation.target_soldier_id] += 1
@@ -44,5 +87,17 @@ class PolicyEngine:
 
 
 def observations_to_roster(observations: list[Observation]) -> set[str]:
-    observed = {item.soldier_id for item in observations if item.soldier_id}
+    observed = {
+        item.soldier_id for item in observations if item.soldier_id and item.soldier_id != "UNKNOWN"
+    }
     return observed or {"Jones", "Smith", "Garcia"}
+
+
+def _contains_unnegated_term(text: str, terms: tuple[str, ...]) -> bool:
+    for term in terms:
+        if term not in text:
+            continue
+        if re.search(rf"\b(no|without)\b[^.]*{re.escape(term)}", text):
+            continue
+        return True
+    return False
