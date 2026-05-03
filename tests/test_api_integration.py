@@ -69,7 +69,11 @@ def _install_fake_runtime(monkeypatch, api_key: str | None = None) -> InMemoryRu
 
 async def _submit_ingest(envelope: IngestEnvelope):
     tasks = BackgroundTasks()
-    record = await main.ingest(envelope, tasks)
+    record = await main.ingest(
+        envelope,
+        tasks,
+        _request("/v1/ingest", method="POST", headers={"X-Trace-Id": "trace-ingest"}),
+    )
     await tasks()
     return record
 
@@ -119,6 +123,7 @@ def test_http_ingest_review_decision_and_soldier_performance_flow(monkeypatch) -
 
     run = main.get_run(run_id)
     assert run.status == "pending_approval"
+    assert run.trace_id == "trace-ingest"
     assert len(run.recommendations) == 3
     pending = next(item for item in run.recommendations if item.status == "pending")
     recommendation = pending.recommendation
@@ -143,6 +148,11 @@ def test_http_ingest_review_decision_and_soldier_performance_flow(monkeypatch) -
     decision = main.decide_recommendation(
         recommendation.recommendation_id,
         RecommendationDecision(decision="approve", edited_recommendation=edited),
+        _request(
+            f"/v1/recommendations/{recommendation.recommendation_id}/decision",
+            method="POST",
+            headers={"X-Trace-Id": "trace-decision"},
+        ),
     )
     assert decision.status == "approved"
 
@@ -173,14 +183,17 @@ def test_http_ingest_review_decision_and_soldier_performance_flow(monkeypatch) -
     decision_event = next(
         event for event in audit if event.recommendation_id == decision.recommendation_id
     )
+    assert decision_event.trace_id == "trace-decision"
     assert decision_event.payload["edited"] is True
     outbox = main.list_pending_outbox_events()
+    assert outbox[0].trace_id == "trace-decision"
     assert outbox[0].payload["edited"] is True
     updates = main.store.list_update_events(
         entity_type="recommendation",
         entity_id=decision.recommendation_id,
     )
     assert "two-minute SITREP" in updates[0].patch["recommendation"]["proposed_modification"]
+    assert updates[0].trace_id == "trace-decision"
 
     lesson = LessonsLearnedSignal(
         lesson_id="lesson-1",
@@ -192,8 +205,18 @@ def test_http_ingest_review_decision_and_soldier_performance_flow(monkeypatch) -
         summary="System 3 observed that compressed post-contact reporting affected follow-on planning.",
         evidence_refs=[EvidenceRef(ref="system3://lessons/lesson-1", role="source_lesson")],
     )
-    receipt = main.record_lessons_learned(lesson)
-    duplicate = main.record_lessons_learned(lesson)
+    receipt = main.record_lessons_learned(
+        lesson,
+        _request(
+            "/v1/lessons-learned",
+            method="POST",
+            headers={"X-Trace-Id": "trace-lesson"},
+        ),
+    )
+    duplicate = main.record_lessons_learned(
+        lesson,
+        _request("/v1/lessons-learned", method="POST"),
+    )
     assert receipt.status == "accepted"
     assert duplicate.status == "duplicate"
     assert receipt.source_refs == duplicate.source_refs
@@ -205,6 +228,7 @@ def test_http_ingest_review_decision_and_soldier_performance_flow(monkeypatch) -
     )
     assert len(lesson_updates) == 1
     assert lesson_updates[0].source_service == "system-3"
+    assert lesson_updates[0].trace_id == "trace-lesson"
     assert lesson_updates[0].patch["lesson_id"] == "lesson-1"
 
 
@@ -246,3 +270,4 @@ def test_cors_allowlist_installs_expected_middleware() -> None:
     assert middleware.kwargs["allow_origins"] == ["http://localhost:3000"]
     assert middleware.kwargs["allow_methods"] == ["GET", "POST", "OPTIONS"]
     assert "X-API-Key" in middleware.kwargs["allow_headers"]
+    assert "X-Trace-Id" in middleware.kwargs["allow_headers"]

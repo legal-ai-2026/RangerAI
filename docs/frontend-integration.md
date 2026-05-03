@@ -62,6 +62,16 @@ If `SYSTEM1_API_KEY` is configured, include it on operational requests:
 X-API-Key: <configured value>
 ```
 
+The frontend may also send a stable trace id per user action:
+
+```text
+X-Trace-Id: <frontend-generated-correlation-id>
+```
+
+If the header is omitted, the API generates one and returns it as
+`X-Trace-Id`. Persist the value with the run or decision UI state so support
+logs, audit events, outbox events, and update-ledger entries can be correlated.
+
 Current backend status:
 
 - No frontend code is hosted by this repository.
@@ -347,6 +357,7 @@ Important fields:
 
 - `run_id`
 - `status`
+- `trace_id`
 - `ingest`
 - `transcript`
 - `ocr_pages`
@@ -641,7 +652,7 @@ Panels:
 1. Start API:
 
    ```bash
-   uv run uvicorn src.api.main:app --reload --port 8001
+   uv run python tools/run_api.py --host 0.0.0.0 --port 8001 --reload
    ```
 
 2. Check health:
@@ -679,6 +690,12 @@ Panels:
    ```text
    GET http://127.0.0.1:8001/v1/dashboard/runs/{run_id}
    GET http://127.0.0.1:8001/v1/runs/{run_id}/audit
+   ```
+
+8. Run the synthetic HTTP smoke loop:
+
+   ```bash
+   uv run python tools/smoke_synthetic.py
    ```
 
 ## Integration Checklist

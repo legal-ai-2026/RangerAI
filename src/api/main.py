@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 import hashlib
 import json
+from uuid import uuid4
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -53,7 +54,7 @@ def _install_cors(target_app: FastAPI, config: Settings) -> None:
         allow_origins=list(config.cors_allow_origins),
         allow_credentials=True,
         allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "X-API-Key"],
+        allow_headers=["Authorization", "Content-Type", "X-API-Key", "X-Trace-Id"],
     )
 
 
@@ -67,6 +68,17 @@ _install_cors(app, settings)
 
 
 @app.middleware("http")
+async def attach_trace_id(
+    request: Request,
+    call_next: Callable[[Request], Awaitable[Response]],
+) -> Response:
+    trace_id = _trace_id(request)
+    response = await call_next(request)
+    response.headers["X-Trace-Id"] = trace_id
+    return response
+
+
+@app.middleware("http")
 async def require_api_key(
     request: Request,
     call_next: Callable[[Request], Awaitable[Response]],
@@ -77,6 +89,7 @@ async def require_api_key(
             return JSONResponse(
                 status_code=401,
                 content={"detail": "invalid or missing API key"},
+                headers={"X-Trace-Id": _trace_id(request)},
             )
     return await call_next(request)
 
@@ -116,9 +129,14 @@ def healthz() -> dict[str, object]:
 
 
 @app.post("/v1/ingest", response_model=RunRecord, status_code=202)
-async def ingest(envelope: IngestEnvelope, background_tasks: BackgroundTasks) -> RunRecord:
-    record = workflow.create_run(envelope)
-    background_tasks.add_task(workflow.process, record.run_id)
+async def ingest(
+    envelope: IngestEnvelope,
+    background_tasks: BackgroundTasks,
+    request: Request,
+) -> RunRecord:
+    trace_id = _trace_id(request)
+    record = workflow.create_run(envelope, trace_id=trace_id)
+    background_tasks.add_task(workflow.process, record.run_id, trace_id)
     return record
 
 
@@ -215,7 +233,11 @@ def mark_outbox_event_published(event_id: str) -> OutboxPublishResponse:
 
 
 @app.post("/v1/lessons-learned", response_model=LessonsLearnedReceipt, status_code=202)
-def record_lessons_learned(lesson: LessonsLearnedSignal) -> LessonsLearnedReceipt:
+def record_lessons_learned(
+    lesson: LessonsLearnedSignal,
+    request: Request,
+) -> LessonsLearnedReceipt:
+    trace_id = _trace_id(request)
     inserted = store.put_lesson_signal(lesson)
     source_refs = _lesson_source_refs(lesson)
     if inserted:
@@ -226,6 +248,7 @@ def record_lessons_learned(lesson: LessonsLearnedSignal) -> LessonsLearnedReceip
                 entity_id=lesson.lesson_id,
                 source_service=lesson.source_system,
                 operation="create",
+                trace_id=trace_id,
                 patch=payload,
                 source_refs=source_refs,
                 content_hash_after=_content_hash(payload),
@@ -242,6 +265,7 @@ def _approve_recommendation(
     run_id: str,
     recommendation_id: str,
     edited_recommendation: ScenarioRecommendation | None = None,
+    trace_id: str | None = None,
 ) -> ApprovalResponse:
     try:
         return workflow.approve(
@@ -249,6 +273,7 @@ def _approve_recommendation(
             recommendation_id,
             approved=True,
             edited_recommendation=edited_recommendation,
+            trace_id=trace_id,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -256,9 +281,18 @@ def _approve_recommendation(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-def _reject_recommendation(run_id: str, recommendation_id: str) -> ApprovalResponse:
+def _reject_recommendation(
+    run_id: str,
+    recommendation_id: str,
+    trace_id: str | None = None,
+) -> ApprovalResponse:
     try:
-        return workflow.approve(run_id, recommendation_id, approved=False)
+        return workflow.approve(
+            run_id,
+            recommendation_id,
+            approved=False,
+            trace_id=trace_id,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -268,27 +302,34 @@ def _reject_recommendation(run_id: str, recommendation_id: str) -> ApprovalRespo
 def _approve_recommendation_by_id(
     recommendation_id: str,
     edited_recommendation: ScenarioRecommendation | None = None,
+    trace_id: str | None = None,
 ) -> ApprovalResponse:
     run_id = _run_id_for_recommendation(recommendation_id)
-    return _approve_recommendation(run_id, recommendation_id, edited_recommendation)
+    return _approve_recommendation(run_id, recommendation_id, edited_recommendation, trace_id)
 
 
-def _reject_recommendation_by_id(recommendation_id: str) -> ApprovalResponse:
+def _reject_recommendation_by_id(
+    recommendation_id: str,
+    trace_id: str | None = None,
+) -> ApprovalResponse:
     run_id = _run_id_for_recommendation(recommendation_id)
-    return _reject_recommendation(run_id, recommendation_id)
+    return _reject_recommendation(run_id, recommendation_id, trace_id)
 
 
 @app.post("/v1/recommendations/{recommendation_id}/decision", response_model=ApprovalResponse)
 def decide_recommendation(
     recommendation_id: str,
     decision: RecommendationDecision,
+    request: Request,
 ) -> ApprovalResponse:
+    trace_id = _trace_id(request)
     if decision.decision == "approve":
         return _approve_recommendation_by_id(
             recommendation_id,
             decision.edited_recommendation,
+            trace_id,
         )
-    return _reject_recommendation_by_id(recommendation_id)
+    return _reject_recommendation_by_id(recommendation_id, trace_id)
 
 
 def _run_id_for_recommendation(recommendation_id: str) -> str:
@@ -309,6 +350,15 @@ def _requires_api_key(request: Request) -> bool:
     if request.method == "OPTIONS":
         return False
     return request.url.path.startswith("/v1/") and request.url.path != "/v1/healthz"
+
+
+def _trace_id(request: Request) -> str:
+    existing = getattr(request.state, "trace_id", None)
+    if existing:
+        return str(existing)
+    trace_id = request.headers.get("x-trace-id") or str(uuid4())
+    request.state.trace_id = trace_id
+    return trace_id
 
 
 def _lesson_source_refs(lesson: LessonsLearnedSignal) -> list[str]:

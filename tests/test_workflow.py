@@ -1,7 +1,18 @@
 import asyncio
+from enum import Enum
+from typing import Any
+
+import pytest
+from fastapi import Request
+from pydantic import BaseModel
 
 from src.agent.cache import InMemoryRunLease
-from src.agent.graph import FallbackRangerGraph
+from src.agent.graph import (
+    FallbackRangerGraph,
+    build_ranger_graph,
+    extract_state,
+    to_checkpoint_state,
+)
 from src.agent.store import InMemoryRunStore
 from src.agent.workflow import RangerWorkflow
 from src.api import main
@@ -20,6 +31,22 @@ class FakeKG:
 
     def write_recommendation(self, _recommendation) -> None:
         return None
+
+    def recent_observation_refs(self, soldier_ids):
+        return {soldier_id: [] for soldier_id in soldier_ids}
+
+
+class HistoryKG(FakeKG):
+    def recent_observation_refs(self, soldier_ids):
+        return {
+            soldier_id: [f"falkor://ranger/Observation/history-{soldier_id}#history"]
+            for soldier_id in soldier_ids
+        }
+
+
+class FailingKG(FakeKG):
+    def write_observations(self, _ingest, _observations):
+        raise RuntimeError("FalkorDB unavailable")
 
 
 class FakeProviders:
@@ -53,6 +80,20 @@ def fake_workflow(
     )
 
 
+def _request(path: str, method: str = "POST") -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": method,
+            "path": path,
+            "headers": [],
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "query_string": b"",
+        }
+    )
+
+
 def test_ingest_to_approval_workflow() -> None:
     store = InMemoryRunStore()
     workflow = fake_workflow(store)
@@ -67,7 +108,8 @@ def test_ingest_to_approval_workflow() -> None:
                 "Jones blew Phase Line Bird. Smith asleep at 0300. "
                 "Garcia textbook ambush rehearsal."
             ),
-        )
+        ),
+        trace_id="trace-workflow",
     )
 
     asyncio.run(workflow.process(record.run_id))
@@ -100,6 +142,7 @@ def test_ingest_to_approval_workflow() -> None:
     }.issubset(audit_event_types)
     outbox_events = store.list_outbox_events(record.run_id)
     assert [event.event_type for event in outbox_events] == ["recommendation.approved"]
+    assert outbox_events[0].trace_id == "trace-workflow"
     assert outbox_events[0].payload["target_ids"] == pending.recommendation.target_ids.model_dump(
         mode="json", exclude_none=True
     )
@@ -111,7 +154,102 @@ def test_ingest_to_approval_workflow() -> None:
     ]
     assert len(recommendation_updates) == 1
     assert recommendation_updates[0].operation == "approve"
+    assert recommendation_updates[0].trace_id == "trace-workflow"
     assert recommendation_updates[0].source_refs
+
+
+def test_graph_checkpoint_state_is_json_safe() -> None:
+    providers = FakeProviders()
+    kg = FakeKG()
+    graph = build_ranger_graph(providers=providers, kg=kg)
+    state = {
+        "run_id": "run-json-safe",
+        "ingest": IngestEnvelope(
+            instructor_id="ri-1",
+            platoon_id="plt-1",
+            mission_id="m-1",
+            phase=Phase.mountain,
+            geo=GeoPoint(lat=35.0, lon=-83.0, grid_mgrs="17S"),
+            free_text="Jones blew Phase Line Bird.",
+        ),
+    }
+
+    output = asyncio.run(
+        graph.ainvoke(
+            to_checkpoint_state(state),
+            config={"configurable": {"thread_id": "run-json-safe"}},
+        )
+    )
+    if "__interrupt__" in output:
+        snapshot = graph.get_state({"configurable": {"thread_id": "run-json-safe"}})
+        _assert_json_safe(snapshot.values)
+        typed = extract_state(
+            output,
+            graph=graph,
+            config={"configurable": {"thread_id": "run-json-safe"}},
+        )
+        assert typed["status"] == "pending_approval"
+    else:
+        _assert_json_safe(output)
+
+
+def _assert_json_safe(value: Any) -> None:
+    assert not isinstance(value, BaseModel)
+    assert not isinstance(value, Enum)
+    if isinstance(value, dict):
+        for item in value.values():
+            _assert_json_safe(item)
+    elif isinstance(value, list):
+        for item in value:
+            _assert_json_safe(item)
+
+
+def test_recommendation_context_includes_recent_kg_history() -> None:
+    store = InMemoryRunStore()
+    workflow = fake_workflow(store, kg=HistoryKG())
+    record = workflow.create_run(
+        IngestEnvelope(
+            instructor_id="ri-1",
+            platoon_id="plt-1",
+            mission_id="m-1",
+            phase=Phase.mountain,
+            geo=GeoPoint(lat=35.0, lon=-83.0, grid_mgrs="17S"),
+            free_text="Jones blew Phase Line Bird.",
+        )
+    )
+
+    asyncio.run(workflow.process(record.run_id))
+
+    completed = store.get(record.run_id)
+    assert completed is not None
+    recommendation = completed.recommendations[0].recommendation
+    assert "falkor://ranger/Observation/history-Jones#history" in (
+        recommendation.model_context_refs
+    )
+
+
+def test_process_continues_when_kg_write_fails() -> None:
+    store = InMemoryRunStore()
+    workflow = fake_workflow(store, kg=FailingKG())
+    record = workflow.create_run(
+        IngestEnvelope(
+            instructor_id="ri-1",
+            platoon_id="plt-1",
+            mission_id="m-1",
+            phase=Phase.mountain,
+            geo=GeoPoint(lat=35.0, lon=-83.0, grid_mgrs="17S"),
+            free_text="Jones blew Phase Line Bird.",
+        )
+    )
+
+    asyncio.run(workflow.process(record.run_id))
+
+    completed = store.get(record.run_id)
+    assert completed is not None
+    assert completed.status == "pending_approval"
+    assert completed.recommendations
+    assert completed.kg_write_summary == {"observations": 0}
+    assert completed.errors == ["KG write failed: FalkorDB unavailable"]
 
 
 def test_dashboard_summary_includes_soldier_metrics_and_recommendations() -> None:
@@ -223,8 +361,66 @@ def test_v1_decision_rejects_pending_recommendation() -> None:
         response = main.decide_recommendation(
             pending.recommendation.recommendation_id,
             main.RecommendationDecision(decision="reject"),
+            _request("/v1/recommendations/test/decision"),
         )
         assert response.status == "rejected"
+    finally:
+        main.store = previous_store
+        main.workflow = previous_workflow
+
+
+def test_v1_decision_rejects_instructor_edit_that_fails_policy() -> None:
+    store = InMemoryRunStore()
+    workflow = fake_workflow(store)
+    previous_store = main.store
+    previous_workflow = main.workflow
+    try:
+        main.store = store
+        main.workflow = workflow
+        record = workflow.create_run(
+            IngestEnvelope(
+                instructor_id="ri-1",
+                platoon_id="plt-1",
+                mission_id="m-1",
+                phase=Phase.mountain,
+                geo=GeoPoint(lat=35.0, lon=-83.0, grid_mgrs="17S"),
+                free_text="Jones blew Phase Line Bird.",
+            )
+        )
+        asyncio.run(workflow.process(record.run_id))
+        completed = store.get(record.run_id)
+        assert completed is not None
+        pending = next(item for item in completed.recommendations if item.status == "pending")
+        edited = pending.recommendation.model_copy(
+            update={
+                "target_soldier_id": "Unknown",
+                "rationale": (
+                    "Instructor edit intentionally points at an unvalidated target to "
+                    "exercise the deterministic policy gate."
+                ),
+            }
+        )
+
+        with pytest.raises(main.HTTPException) as exc:
+            main.decide_recommendation(
+                pending.recommendation.recommendation_id,
+                main.RecommendationDecision(
+                    decision="approve",
+                    edited_recommendation=edited,
+                ),
+                _request("/v1/recommendations/test/decision"),
+            )
+
+        assert exc.value.status_code == 409
+        assert "edited recommendation failed policy" in exc.value.detail
+        unchanged = store.get(record.run_id)
+        assert unchanged is not None
+        still_pending = next(
+            item
+            for item in unchanged.recommendations
+            if item.recommendation.recommendation_id == pending.recommendation.recommendation_id
+        )
+        assert still_pending.status == "pending"
     finally:
         main.store = previous_store
         main.workflow = previous_workflow

@@ -123,6 +123,33 @@ class KGClient:
                 },
             )
 
+    def recent_observation_refs(
+        self,
+        soldier_ids: list[str],
+        limit_per_soldier: int = 3,
+    ) -> dict[str, list[str]]:
+        if not soldier_ids:
+            return {}
+        graph = self.connect()
+        refs: dict[str, list[str]] = {soldier_id: [] for soldier_id in soldier_ids}
+        for soldier_id in soldier_ids:
+            result = graph.query(
+                """
+                MATCH (s:Soldier {soldier_id:$soldier_id})-[:HAS_OBSERVATION]->(o:Observation)
+                RETURN o.observation_id AS observation_id, o.timestamp AS timestamp
+                ORDER BY timestamp DESC
+                LIMIT $limit
+                """,
+                {"soldier_id": soldier_id, "limit": limit_per_soldier},
+            )
+            for row in _query_rows(result):
+                observation_id = _row_value(row, 0, "observation_id")
+                if observation_id:
+                    refs[soldier_id].append(
+                        f"falkor://{self.graph_name}/Observation/{observation_id}#history"
+                    )
+        return refs
+
 
 def _observation_ids(recommendation: ScenarioRecommendation) -> list[str]:
     ids: list[str] = []
@@ -146,3 +173,22 @@ def _entity_id_from_locator(locator: str, entity_type: str) -> str | None:
         return None
     value = locator.split(marker, maxsplit=1)[1].split("#", maxsplit=1)[0]
     return value or None
+
+
+def _query_rows(result: Any) -> list[Any]:
+    if hasattr(result, "result_set"):
+        return list(result.result_set)
+    if hasattr(result, "records"):
+        return list(result.records)
+    if isinstance(result, list):
+        return result
+    return []
+
+
+def _row_value(row: Any, index: int, key: str) -> Any:
+    if isinstance(row, dict):
+        return row.get(key)
+    try:
+        return row[index]
+    except (IndexError, TypeError):
+        return None

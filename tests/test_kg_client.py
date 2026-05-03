@@ -16,6 +16,16 @@ class FakeGraph:
         self.queries.append((query, params or {}))
 
 
+class FakeQueryResult:
+    result_set = [["obs-new"], ["obs-old"]]
+
+
+class FakeGraphWithRows(FakeGraph):
+    def query(self, query: str, params: dict[str, object] | None = None) -> FakeQueryResult:
+        self.queries.append((query, params or {}))
+        return FakeQueryResult()
+
+
 def test_write_recommendation_adds_provenance_edges() -> None:
     graph = FakeGraph()
     client = KGClient()
@@ -55,3 +65,19 @@ def test_write_recommendation_adds_provenance_edges() -> None:
     assert {"recommendation_id": "rec-1", "task_code": "MV-2"} in [
         params for _query, params in graph.queries
     ]
+
+
+def test_recent_observation_refs_returns_falkor_locators() -> None:
+    graph = FakeGraphWithRows()
+    client = KGClient(graph_name="ranger")
+    client._graph = graph
+
+    refs = client.recent_observation_refs(["Jones"], limit_per_soldier=2)
+
+    assert refs == {
+        "Jones": [
+            "falkor://ranger/Observation/obs-new#history",
+            "falkor://ranger/Observation/obs-old#history",
+        ]
+    }
+    assert graph.queries[0][1] == {"soldier_id": "Jones", "limit": 2}

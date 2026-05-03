@@ -179,6 +179,7 @@ class RunRecord(StrictModel):
     run_id: str
     status: RunStatus
     ingest: IngestEnvelope
+    trace_id: str | None = None
     transcript: str | None = None
     ocr_pages: list[ORBookletPage] = Field(default_factory=list)
     observations: list[Observation] = Field(default_factory=list)
@@ -425,6 +426,7 @@ class AuditEvent(StrictModel):
     ]
     actor_id: str | None = None
     recommendation_id: str | None = None
+    trace_id: str | None = None
     payload: dict[str, object] = Field(default_factory=dict)
     timestamp_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -434,6 +436,7 @@ class OutboxEvent(StrictModel):
     event_type: Literal["recommendation.approved", "recommendation.rejected"]
     aggregate_id: str
     run_id: str
+    trace_id: str | None = None
     payload: dict[str, object] = Field(default_factory=dict)
     status: Literal["pending", "published"] = "pending"
     timestamp_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -450,6 +453,7 @@ class UpdateLedgerEntry(StrictModel):
     entity_id: str = Field(min_length=1)
     source_service: str = "system-1"
     operation: UpdateOperation
+    trace_id: str | None = None
     base_version_id: str | None = None
     patch: dict[str, object] = Field(default_factory=dict)
     source_refs: list[str] = Field(default_factory=list)

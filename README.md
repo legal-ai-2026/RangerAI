@@ -64,9 +64,10 @@ FALKORDB_PASSWORD=
 Current code uses Postgres for run storage when the Postgres environment values
 are configured; otherwise it falls back to an in-memory store for local
 development. Redis is used for run-level workflow leases when `REDIS_URL` is
-configured. A pgvector document store adapter exists for future doctrine and
-observation retrieval. Redis-backed LangGraph checkpointing and embedding
-ingestion are still pending.
+configured. FalkorDB stores mission graph observations and approved
+recommendation provenance. A pgvector document store adapter exists for future
+doctrine and observation retrieval. Redis-backed LangGraph checkpointing and
+embedding ingestion are still pending.
 
 For local infrastructure only, use `docker/compose.dev.yaml`. The main app is
 started separately with `uvicorn`.
@@ -93,8 +94,11 @@ started separately with `uvicorn`.
 4. Run the API process:
 
    ```bash
-   uv run uvicorn src.api.main:app --reload --port 8001
+   uv run python tools/run_api.py --host 0.0.0.0 --port 8001 --reload
    ```
+
+   The helper loads `.env` and then `.env.local` before importing the app, which
+   avoids shell-specific environment sourcing issues.
 
 5. Open API docs at `http://localhost:8001/docs`.
 
@@ -103,7 +107,7 @@ started separately with `uvicorn`.
 ```bash
 uv sync --extra dev
 docker compose -f docker/compose.dev.yaml up -d
-uv run uvicorn src.api.main:app --reload --port 8001
+make dev-api
 uv run pytest
 uv run ruff check .
 uv run --extra dev mypy src
@@ -119,6 +123,13 @@ Check configured infrastructure connectivity without printing credentials:
 
 ```bash
 make infra-health
+```
+
+Run the synthetic API smoke loop against a running local API without provider
+or OpenAI smoke calls:
+
+```bash
+make smoke
 ```
 
 ## API Flow
@@ -137,6 +148,10 @@ make infra-health
 - `POST /v1/outbox/{event_id}/published` marks an outbox event as published.
 - `POST /v1/lessons-learned` records an idempotent System 3 lesson signal receipt keyed by `lesson_id`.
 - `GET /v1/healthz` reports configured providers, FalkorDB health, and LangGraph importability.
+
+Operational routes accept an optional `X-Trace-Id` request header. When omitted,
+the API generates one and echoes it back as `X-Trace-Id`; run records, audit
+events, outbox events, and update-ledger entries carry the trace id.
 
 Recommendations are generated from a curated, retrieval-first scenario
 intervention library before model fallback. Each recommendation can carry an

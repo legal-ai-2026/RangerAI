@@ -301,10 +301,11 @@ class PostgresRunStore:
                     event_type,
                     actor_id,
                     recommendation_id,
+                    trace_id,
                     payload,
                     timestamp_utc
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (event_id) DO NOTHING
                 """,
                 (
@@ -313,6 +314,7 @@ class PostgresRunStore:
                     event.event_type,
                     event.actor_id,
                     event.recommendation_id,
+                    event.trace_id,
                     Jsonb(event.payload),
                     event.timestamp_utc,
                 ),
@@ -329,6 +331,7 @@ class PostgresRunStore:
                     event_type,
                     actor_id,
                     recommendation_id,
+                    trace_id,
                     payload,
                     timestamp_utc
                 FROM ranger_audit_events
@@ -344,8 +347,9 @@ class PostgresRunStore:
                 event_type=row[2],
                 actor_id=row[3],
                 recommendation_id=row[4],
-                payload=row[5],
-                timestamp_utc=row[6],
+                trace_id=row[5],
+                payload=row[6],
+                timestamp_utc=row[7],
             )
             for row in rows
         ]
@@ -362,11 +366,12 @@ class PostgresRunStore:
                     event_type,
                     aggregate_id,
                     run_id,
+                    trace_id,
                     payload,
                     status,
                     timestamp_utc
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (event_id) DO NOTHING
                 """,
                 (
@@ -374,6 +379,7 @@ class PostgresRunStore:
                     event.event_type,
                     event.aggregate_id,
                     event.run_id,
+                    event.trace_id,
                     Jsonb(event.payload),
                     event.status,
                     event.timestamp_utc,
@@ -390,6 +396,7 @@ class PostgresRunStore:
                     event_type,
                     aggregate_id,
                     run_id,
+                    trace_id,
                     payload,
                     status,
                     timestamp_utc
@@ -405,9 +412,10 @@ class PostgresRunStore:
                 event_type=row[1],
                 aggregate_id=row[2],
                 run_id=row[3],
-                payload=row[4],
-                status=row[5],
-                timestamp_utc=row[6],
+                trace_id=row[4],
+                payload=row[5],
+                status=row[6],
+                timestamp_utc=row[7],
             )
             for row in rows
         ]
@@ -422,6 +430,7 @@ class PostgresRunStore:
                     event_type,
                     aggregate_id,
                     run_id,
+                    trace_id,
                     payload,
                     status,
                     timestamp_utc
@@ -460,6 +469,7 @@ class PostgresRunStore:
                     entity_id,
                     source_service,
                     operation,
+                    trace_id,
                     base_version_id,
                     patch,
                     source_refs,
@@ -467,7 +477,7 @@ class PostgresRunStore:
                     content_hash_after,
                     created_at_utc
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (version_id) DO NOTHING
                 """,
                 (
@@ -476,6 +486,7 @@ class PostgresRunStore:
                     event.entity_id,
                     event.source_service,
                     event.operation,
+                    event.trace_id,
                     event.base_version_id,
                     Jsonb(event.patch),
                     Jsonb(event.source_refs),
@@ -513,6 +524,7 @@ class PostgresRunStore:
                     entity_id,
                     source_service,
                     operation,
+                    trace_id,
                     base_version_id,
                     patch,
                     source_refs,
@@ -607,11 +619,13 @@ class PostgresRunStore:
                 event_type text NOT NULL,
                 actor_id text,
                 recommendation_id text,
+                trace_id text,
                 payload jsonb NOT NULL,
                 timestamp_utc timestamptz NOT NULL
             )
             """
         )
+        conn.execute("ALTER TABLE ranger_audit_events ADD COLUMN IF NOT EXISTS trace_id text")
         conn.execute(
             """
             CREATE INDEX IF NOT EXISTS ranger_audit_events_run_id_idx
@@ -625,12 +639,14 @@ class PostgresRunStore:
                 event_type text NOT NULL,
                 aggregate_id text NOT NULL,
                 run_id text NOT NULL,
+                trace_id text,
                 payload jsonb NOT NULL,
                 status text NOT NULL,
                 timestamp_utc timestamptz NOT NULL
             )
             """
         )
+        conn.execute("ALTER TABLE ranger_outbox_events ADD COLUMN IF NOT EXISTS trace_id text")
         conn.execute(
             """
             CREATE INDEX IF NOT EXISTS ranger_outbox_events_status_idx
@@ -645,6 +661,7 @@ class PostgresRunStore:
                 entity_id text NOT NULL,
                 source_service text NOT NULL,
                 operation text NOT NULL,
+                trace_id text,
                 base_version_id text,
                 patch jsonb NOT NULL,
                 source_refs jsonb NOT NULL,
@@ -654,6 +671,7 @@ class PostgresRunStore:
             )
             """
         )
+        conn.execute("ALTER TABLE ranger_update_ledger ADD COLUMN IF NOT EXISTS trace_id text")
         conn.execute(
             """
             CREATE INDEX IF NOT EXISTS ranger_update_ledger_entity_idx
@@ -713,9 +731,10 @@ def _outbox_event_from_row(row: Any) -> OutboxEvent:
         event_type=row[1],
         aggregate_id=row[2],
         run_id=row[3],
-        payload=row[4],
-        status=row[5],
-        timestamp_utc=row[6],
+        trace_id=row[4],
+        payload=row[5],
+        status=row[6],
+        timestamp_utc=row[7],
     )
 
 
@@ -726,10 +745,11 @@ def _update_event_from_row(row: Any) -> UpdateLedgerEntry:
         entity_id=row[2],
         source_service=row[3],
         operation=row[4],
-        base_version_id=row[5],
-        patch=row[6],
-        source_refs=row[7],
-        content_hash_before=row[8],
-        content_hash_after=row[9],
-        created_at_utc=row[10],
+        trace_id=row[5],
+        base_version_id=row[6],
+        patch=row[7],
+        source_refs=row[8],
+        content_hash_before=row[9],
+        content_hash_after=row[10],
+        created_at_utc=row[11],
     )

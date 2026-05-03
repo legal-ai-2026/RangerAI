@@ -27,3 +27,12 @@ def test_policy_blocks_high_risk() -> None:
     decision = PolicyEngine(roster={"Jones"}).evaluate(recommendation("Jones", RiskLevel.high))
     assert not decision.allowed
     assert "high-risk recommendations require manual replanning" in decision.reasons
+
+
+def test_policy_blocks_cold_water_immersion_language() -> None:
+    unsafe = recommendation("Jones").model_copy(
+        update={"safety_checks": ["Avoid this chest-deep cold-water crossing."]}
+    )
+    decision = PolicyEngine(roster={"Jones"}).evaluate(unsafe)
+    assert not decision.allowed
+    assert "unsafe cold-water or immersion condition detected" in decision.reasons

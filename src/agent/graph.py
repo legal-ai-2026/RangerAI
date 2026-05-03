@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from enum import Enum
 from typing import Any, Literal, TypedDict, cast
 
+from pydantic import BaseModel
 from typing_extensions import NotRequired
 
 from src.agent.policy import PolicyEngine, observations_to_roster
@@ -132,18 +134,21 @@ class RangerGraphNodes:
         self.kg = kg
 
     async def stt_node(self, state: RangerState) -> dict[str, Any]:
+        state = _typed_state(state)
         ingest = state["ingest"]
         if not ingest.audio_b64:
-            return {"transcript": None}
-        return {"transcript": await self.providers.transcribe(ingest.audio_b64)}
+            return _json_update({"transcript": None})
+        return _json_update({"transcript": await self.providers.transcribe(ingest.audio_b64)})
 
     async def ocr_node(self, state: RangerState) -> dict[str, Any]:
+        state = _typed_state(state)
         ingest = state["ingest"]
         if not ingest.image_b64:
-            return {"ocr_pages": []}
-        return {"ocr_pages": await self.providers.ocr_pages(ingest.image_b64)}
+            return _json_update({"ocr_pages": []})
+        return _json_update({"ocr_pages": await self.providers.ocr_pages(ingest.image_b64)})
 
     async def extract_node(self, state: RangerState) -> dict[str, Any]:
+        state = _typed_state(state)
         source_text = "\n".join(
             item
             for item in [
@@ -158,29 +163,34 @@ class RangerGraphNodes:
             if item
         )
         observations = await self.providers.extract_observations(source_text)
-        return {"observations": observations, "status": RunStatus.processing}
+        return _json_update({"observations": observations, "status": RunStatus.processing})
 
     async def kg_write_node(self, state: RangerState) -> dict[str, Any]:
+        state = _typed_state(state)
         errors = list(state.get("errors", []))
         try:
             summary = self.kg.write_observations(state["ingest"], state.get("observations", []))
         except Exception as exc:
             errors.append(f"KG write failed: {exc}")
             summary = {"observations": 0}
-        return {"kg_write_summary": summary, "errors": errors}
+        return _json_update({"kg_write_summary": summary, "errors": errors})
 
     async def reason_node(self, state: RangerState) -> dict[str, Any]:
-        recommendations = await self.providers.draft_recommendations(state.get("observations", []))
+        state = _typed_state(state)
+        observations = state.get("observations", [])
+        recommendations = await self.providers.draft_recommendations(observations)
         recommendations = _bind_recommendation_provenance(
             recommendations=recommendations,
             ingest=state["ingest"],
-            observations=state.get("observations", []),
+            observations=observations,
             run_id=state["run_id"],
             graph_name=self.kg.graph_name,
+            kg_context_refs=_kg_context_refs(self.kg, observations),
         )
-        return {"recommendations": _recommendation_records(recommendations)}
+        return _json_update({"recommendations": _recommendation_records(recommendations)})
 
     async def policy_node(self, state: RangerState) -> dict[str, Any]:
+        state = _typed_state(state)
         policy = PolicyEngine(observations_to_roster(state.get("observations", [])))
         records: list[RecommendationRecord] = []
         for item in state.get("recommendations", []):
@@ -194,32 +204,40 @@ class RangerGraphNodes:
                     status="pending" if decision.allowed else "blocked",
                 )
             )
-        return {
-            "recommendations": records,
-            "status": RunStatus.pending_approval,
-            "approval_complete": _all_decided(records),
-        }
+        return _json_update(
+            {
+                "recommendations": records,
+                "status": RunStatus.pending_approval,
+                "approval_complete": _all_decided(records),
+            }
+        )
 
     async def human_gate_node(self, state: RangerState) -> dict[str, Any]:
+        state = _typed_state(state)
         records = list(state.get("recommendations", []))
         if _all_decided(records):
-            return {"approval_complete": True, "pending_approval_payload": None}
+            return _json_update({"approval_complete": True, "pending_approval_payload": None})
 
         payload = _pending_payload(state)
         resume = interrupt(payload)
         decision = _parse_resume(resume)
         records = _apply_decision(records, decision, state.get("observations", []))
-        return {
-            "recommendations": records,
-            "approval_decisions": [*state.get("approval_decisions", []), decision],
-            "approval_complete": _all_decided(records),
-            "pending_approval_payload": None
-            if _all_decided(records)
-            else _pending_payload({**state, "recommendations": records}),
-            "status": RunStatus.completed if _all_decided(records) else RunStatus.pending_approval,
-        }
+        return _json_update(
+            {
+                "recommendations": records,
+                "approval_decisions": [*state.get("approval_decisions", []), decision],
+                "approval_complete": _all_decided(records),
+                "pending_approval_payload": None
+                if _all_decided(records)
+                else _pending_payload({**state, "recommendations": records}),
+                "status": RunStatus.completed
+                if _all_decided(records)
+                else RunStatus.pending_approval,
+            }
+        )
 
     async def emit_node(self, state: RangerState) -> dict[str, Any]:
+        state = _typed_state(state)
         errors = list(state.get("errors", []))
         for item in state.get("recommendations", []):
             if item.status != "approved":
@@ -228,7 +246,7 @@ class RangerGraphNodes:
                 self.kg.write_recommendation(item.recommendation)
             except Exception as exc:
                 errors.append(f"KG recommendation write failed: {exc}")
-        return {"status": RunStatus.completed, "errors": errors}
+        return _json_update({"status": RunStatus.completed, "errors": errors})
 
 
 class FallbackRangerGraph:
@@ -236,59 +254,65 @@ class FallbackRangerGraph:
 
     def __init__(self, providers: ProviderClients, kg: KGClient) -> None:
         self.nodes = RangerGraphNodes(providers=providers, kg=kg)
-        self.checkpoints: dict[str, RangerState] = {}
+        self.checkpoints: dict[str, dict[str, Any]] = {}
 
     async def ainvoke(
         self, input_data: RangerState | Any, config: dict[str, Any]
     ) -> dict[str, Any]:
         thread_id = _thread_id(config)
         if _is_command(input_data):
-            state = self.checkpoints[thread_id]
+            state = _typed_state(self.checkpoints[thread_id])
             decision = _parse_resume(_command_resume(input_data))
             records = _apply_decision(
                 list(state.get("recommendations", [])),
                 decision,
                 state.get("observations", []),
             )
-            state = {
-                **state,
-                "recommendations": records,
-                "approval_decisions": [*state.get("approval_decisions", []), decision],
-                "approval_complete": _all_decided(records),
-                "status": RunStatus.completed
-                if _all_decided(records)
-                else RunStatus.pending_approval,
-            }
+            state = _typed_state(
+                {
+                    **state,
+                    "recommendations": records,
+                    "approval_decisions": [*state.get("approval_decisions", []), decision],
+                    "approval_complete": _all_decided(records),
+                    "status": RunStatus.completed
+                    if _all_decided(records)
+                    else RunStatus.pending_approval,
+                }
+            )
             if _all_decided(records):
-                state = _merge_state(state, await self.nodes.emit_node(state))
+                state = _typed_state(_merge_state(state, await self.nodes.emit_node(state)))
             else:
-                state = _merge_state(state, {"pending_approval_payload": _pending_payload(state)})
-            self.checkpoints[thread_id] = state
-            return dict(state)
+                state = _typed_state(
+                    _merge_state(state, {"pending_approval_payload": _pending_payload(state)})
+                )
+            self.checkpoints[thread_id] = to_checkpoint_state(state)
+            return to_checkpoint_state(state)
 
-        state = cast(RangerState, dict(input_data))
-        state = _merge_state(state, await self.nodes.stt_node(state))
-        state = _merge_state(state, await self.nodes.ocr_node(state))
-        state = _merge_state(state, await self.nodes.extract_node(state))
-        state = _merge_state(state, await self.nodes.kg_write_node(state))
-        state = _merge_state(state, await self.nodes.reason_node(state))
-        state = _merge_state(state, await self.nodes.policy_node(state))
-        state = _merge_state(
-            state,
-            {
-                "pending_approval_payload": None
-                if _all_decided(state.get("recommendations", []))
-                else _pending_payload(state)
-            },
+        state = _typed_state(input_data)
+        state = _typed_state(_merge_state(state, await self.nodes.stt_node(state)))
+        state = _typed_state(_merge_state(state, await self.nodes.ocr_node(state)))
+        state = _typed_state(_merge_state(state, await self.nodes.extract_node(state)))
+        state = _typed_state(_merge_state(state, await self.nodes.kg_write_node(state)))
+        state = _typed_state(_merge_state(state, await self.nodes.reason_node(state)))
+        state = _typed_state(_merge_state(state, await self.nodes.policy_node(state)))
+        state = _typed_state(
+            _merge_state(
+                state,
+                {
+                    "pending_approval_payload": None
+                    if _all_decided(state.get("recommendations", []))
+                    else _pending_payload(state)
+                },
+            )
         )
         if _all_decided(state.get("recommendations", [])):
-            state = _merge_state(state, await self.nodes.emit_node(state))
-        self.checkpoints[thread_id] = state
-        return dict(state)
+            state = _typed_state(_merge_state(state, await self.nodes.emit_node(state)))
+        self.checkpoints[thread_id] = to_checkpoint_state(state)
+        return to_checkpoint_state(state)
 
     def get_state(self, config: dict[str, Any]) -> Any:
         class Snapshot:
-            def __init__(self, values: RangerState) -> None:
+            def __init__(self, values: dict[str, Any]) -> None:
                 self.values = values
 
         return Snapshot(self.checkpoints[_thread_id(config)])
@@ -306,8 +330,12 @@ def extract_state(output: dict[str, Any], graph: Any, config: dict[str, Any]) ->
         values = dict(snapshot.values)
         values["pending_approval_payload"] = _interrupt_payload(output)
         values["status"] = RunStatus.pending_approval
-        return cast(RangerState, values)
-    return cast(RangerState, output)
+        return _typed_state(values)
+    return _typed_state(output)
+
+
+def to_checkpoint_state(state: RangerState | dict[str, Any]) -> dict[str, Any]:
+    return _json_state(state)
 
 
 def _approval_route(state: RangerState) -> str:
@@ -330,6 +358,7 @@ def _bind_recommendation_provenance(
     observations: list[Observation],
     run_id: str,
     graph_name: str,
+    kg_context_refs: dict[str, list[str]] | None = None,
 ) -> list[ScenarioRecommendation]:
     observations_by_soldier: dict[str, list[Observation]] = {}
     for observation in observations:
@@ -366,13 +395,19 @@ def _bind_recommendation_provenance(
                     role="model_context",
                 )
             )
+        model_context_refs = [f"postgres://ranger_runs/{run_id}#record.observations"]
+        for ref in (
+            kg_context_refs.get(recommendation.target_soldier_id, []) if kg_context_refs else []
+        ):
+            if ref not in model_context_refs:
+                model_context_refs.append(ref)
 
         bound.append(
             recommendation.model_copy(
                 update={
                     "target_ids": target_ids,
                     "evidence_refs": evidence_refs,
-                    "model_context_refs": [f"postgres://ranger_runs/{run_id}#record.observations"],
+                    "model_context_refs": model_context_refs,
                 }
             )
         )
@@ -385,6 +420,7 @@ def _doctrine_locator(doctrine_ref: str) -> str:
 
 
 def _pending_payload(state: RangerState | dict[str, Any]) -> dict[str, Any]:
+    state = _typed_state(state)
     cards: list[PendingRecommendationCard] = []
     for item in state.get("recommendations", []):
         if item.status != "pending":
@@ -516,6 +552,78 @@ def _all_decided(records: list[RecommendationRecord]) -> bool:
 
 def _merge_state(state: RangerState, updates: dict[str, Any]) -> RangerState:
     return cast(RangerState, {**state, **updates})
+
+
+def _typed_state(raw: RangerState | dict[str, Any]) -> RangerState:
+    state = dict(raw)
+    ingest = state.get("ingest")
+    if ingest is not None and not isinstance(ingest, IngestEnvelope):
+        state["ingest"] = IngestEnvelope.model_validate(ingest)
+    state["ocr_pages"] = [
+        item if isinstance(item, ORBookletPage) else ORBookletPage.model_validate(item)
+        for item in state.get("ocr_pages", [])
+    ]
+    state["observations"] = [
+        item if isinstance(item, Observation) else Observation.model_validate(item)
+        for item in state.get("observations", [])
+    ]
+    state["recommendations"] = [
+        item
+        if isinstance(item, RecommendationRecord)
+        else RecommendationRecord.model_validate(item)
+        for item in state.get("recommendations", [])
+    ]
+    status = state.get("status")
+    if isinstance(status, str):
+        state["status"] = RunStatus(status)
+    state["approval_decisions"] = [
+        _typed_approval_resume(item) for item in state.get("approval_decisions", [])
+    ]
+    return cast(RangerState, state)
+
+
+def _typed_approval_resume(value: ApprovalResume | dict[str, Any]) -> ApprovalResume:
+    decision = _parse_resume(value)
+    if "edited_recommendation" in decision and not isinstance(
+        decision["edited_recommendation"], ScenarioRecommendation
+    ):
+        decision["edited_recommendation"] = ScenarioRecommendation.model_validate(
+            decision["edited_recommendation"]
+        )
+    return decision
+
+
+def _json_update(update: dict[str, Any]) -> dict[str, Any]:
+    return _json_state(update)
+
+
+def _json_state(state: RangerState | dict[str, Any]) -> dict[str, Any]:
+    return cast(dict[str, Any], _jsonable(dict(state)))
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, list):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, tuple):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    return value
+
+
+def _kg_context_refs(kg: KGClient, observations: list[Observation]) -> dict[str, list[str]]:
+    soldier_ids = sorted({observation.soldier_id for observation in observations})
+    if not soldier_ids or not hasattr(kg, "recent_observation_refs"):
+        return {}
+    try:
+        refs = kg.recent_observation_refs(soldier_ids)
+    except Exception:
+        return {}
+    return refs if isinstance(refs, dict) else {}
 
 
 def _thread_id(config: dict[str, Any]) -> str:

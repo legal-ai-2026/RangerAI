@@ -11,6 +11,7 @@ from src.agent.graph import (
     build_ranger_graph,
     extract_state,
     make_resume_command,
+    to_checkpoint_state,
 )
 from src.agent.store import RunStore
 from src.contracts import (
@@ -43,14 +44,20 @@ class RangerWorkflow:
         self.lease = lease or build_run_lease()
         self.graph = graph or build_ranger_graph(providers=self.providers, kg=self.kg)
 
-    def create_run(self, ingest: IngestEnvelope) -> RunRecord:
-        record = RunRecord(run_id=str(uuid4()), status=RunStatus.accepted, ingest=ingest)
+    def create_run(self, ingest: IngestEnvelope, trace_id: str | None = None) -> RunRecord:
+        record = RunRecord(
+            run_id=str(uuid4()),
+            status=RunStatus.accepted,
+            ingest=ingest,
+            trace_id=trace_id,
+        )
         self.store.put(record)
         self.store.append_audit_event(
             AuditEvent(
                 run_id=record.run_id,
                 event_type="run_accepted",
                 actor_id=ingest.instructor_id,
+                trace_id=trace_id,
                 payload={
                     "mission_id": ingest.mission_id,
                     "platoon_id": ingest.platoon_id,
@@ -60,10 +67,11 @@ class RangerWorkflow:
         )
         return record
 
-    async def process(self, run_id: str) -> None:
+    async def process(self, run_id: str, trace_id: str | None = None) -> None:
         lease = self.lease.acquire(run_id)
         if not lease.acquired:
             record = self._require_run(run_id)
+            trace_id = trace_id or record.trace_id
             record.errors.append("run is already being processed")
             self.store.put(record)
             self.store.append_audit_event(
@@ -71,18 +79,22 @@ class RangerWorkflow:
                     run_id=run_id,
                     event_type="run_lease_blocked",
                     actor_id=record.ingest.instructor_id,
+                    trace_id=trace_id,
                 )
             )
             return
         record = self._require_run(run_id)
+        trace_id = trace_id or record.trace_id
         try:
             record.status = RunStatus.processing
+            record.trace_id = record.trace_id or trace_id
             self.store.put(record)
             self.store.append_audit_event(
                 AuditEvent(
                     run_id=run_id,
                     event_type="run_processing_started",
                     actor_id=record.ingest.instructor_id,
+                    trace_id=trace_id,
                 )
             )
             state: RangerState = {
@@ -97,7 +109,10 @@ class RangerWorkflow:
                 "errors": record.errors,
             }
             existing_observation_ids = {item.observation_id for item in record.observations}
-            output = await self.graph.ainvoke(state, config=self._graph_config(run_id))
+            output = await self.graph.ainvoke(
+                to_checkpoint_state(state),
+                config=self._graph_config(run_id),
+            )
             updated = self._put_state(
                 run_id,
                 extract_state(output, graph=self.graph, config=self._graph_config(run_id)),
@@ -108,6 +123,7 @@ class RangerWorkflow:
                     run_id=run_id,
                     event_type="run_status_updated",
                     actor_id=record.ingest.instructor_id,
+                    trace_id=trace_id,
                     payload={"status": updated.status.value},
                 )
             )
@@ -121,6 +137,7 @@ class RangerWorkflow:
                     run_id=run_id,
                     event_type="run_failed",
                     actor_id=record.ingest.instructor_id,
+                    trace_id=trace_id,
                     payload={"error": str(exc)},
                 )
             )
@@ -133,6 +150,7 @@ class RangerWorkflow:
         recommendation_id: str,
         approved: bool,
         edited_recommendation: ScenarioRecommendation | None = None,
+        trace_id: str | None = None,
     ) -> ApprovalResponse:
         if edited_recommendation is not None and not approved:
             raise ValueError("edited recommendations can only be submitted with approval")
@@ -146,6 +164,7 @@ class RangerWorkflow:
             raise ValueError("run is already being processed")
         try:
             record = self._require_run(run_id)
+            trace_id = trace_id or record.trace_id
             for item in record.recommendations:
                 if item.recommendation.recommendation_id == recommendation_id:
                     if item.status == "blocked" and approved:
@@ -179,6 +198,7 @@ class RangerWorkflow:
                         run_id=run_id,
                         recommendation=item.recommendation,
                         status=decision_status,
+                        trace_id=trace_id,
                     )
                     self.store.append_update_event(recommendation_update)
                     self.store.append_audit_event(
@@ -187,6 +207,7 @@ class RangerWorkflow:
                             event_type="recommendation_decision_recorded",
                             actor_id=record.ingest.instructor_id,
                             recommendation_id=recommendation_id,
+                            trace_id=trace_id,
                             payload={
                                 "status": decision_status,
                                 "edited": edited_recommendation is not None,
@@ -203,6 +224,7 @@ class RangerWorkflow:
                             event_type=event_type,
                             aggregate_id=recommendation_id,
                             run_id=run_id,
+                            trace_id=trace_id,
                             payload={
                                 "recommendation_id": recommendation_id,
                                 "status": decision_status,
@@ -268,6 +290,7 @@ class RangerWorkflow:
                     run_id=record.run_id,
                     observation=observation,
                     graph_name=self.kg.graph_name,
+                    trace_id=record.trace_id,
                 )
             )
 
@@ -285,12 +308,14 @@ def _observation_update_event(
     run_id: str,
     observation: Observation,
     graph_name: str,
+    trace_id: str | None = None,
 ) -> UpdateLedgerEntry:
     patch = observation.model_dump(mode="json")
     return UpdateLedgerEntry(
         entity_type="observation",
         entity_id=observation.observation_id,
         operation="observe",
+        trace_id=trace_id,
         patch=patch,
         source_refs=[
             f"postgres://ranger_runs/{run_id}#record.observations",
@@ -304,6 +329,7 @@ def _recommendation_update_event(
     run_id: str,
     recommendation: ScenarioRecommendation,
     status: Literal["approved", "rejected"],
+    trace_id: str | None = None,
 ) -> UpdateLedgerEntry:
     patch: dict[str, object] = {
         "recommendation_id": recommendation.recommendation_id,
@@ -319,6 +345,7 @@ def _recommendation_update_event(
         entity_type="recommendation",
         entity_id=recommendation.recommendation_id,
         operation=operation,
+        trace_id=trace_id,
         patch=patch,
         source_refs=[
             f"postgres://ranger_runs/{run_id}#record.recommendations",

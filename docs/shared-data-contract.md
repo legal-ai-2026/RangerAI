@@ -211,6 +211,8 @@ not append another update ledger entry.
 Systems 2 and 3 should resolve the full run, observation, recommendation, and
 audit context by reading `GET /v1/runs/{run_id}` and
 `GET /v1/runs/{run_id}/audit` after receiving an outbox event.
+`OutboxEvent.trace_id` carries the frontend or API-generated correlation id
+from the decision request when available.
 
 `UpdateLedgerEntry` records append-only System 1 updates:
 
@@ -221,6 +223,7 @@ audit context by reading `GET /v1/runs/{run_id}` and
 | `entity_id` | string | `observation_id` or `recommendation_id` |
 | `source_service` | string | Producing or source service, for example `system-1` or `system-3` |
 | `operation` | enum | `create`, `observe`, `approve`, `reject`, or future update operation |
+| `trace_id` | string or null | Frontend or API-generated correlation id for support and audit stitching |
 | `base_version_id` | string or null | Prior version when known |
 | `patch` | object | JSON patch/projection payload for the update |
 | `source_refs` | string array | Source locators used by the update |

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+import argparse
 import os
 import sys
 from pathlib import Path
@@ -21,24 +21,24 @@ def load_env_file(path: Path) -> None:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Run the System 1 API with local env files.")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8001)
+    parser.add_argument("--reload", action="store_true")
+    args = parser.parse_args()
+
     load_env_file(ROOT / ".env")
     load_env_file(ROOT / ".env.local")
 
-    from src.agent.cache import redis_health
-    from src.agent.store import build_run_store
-    from src.agent.vector_store import build_vector_store
-    from src.config import settings
-    from src.kg.client import KGClient
+    import uvicorn
 
-    vector_store = build_vector_store(settings)
-    status = {
-        "postgres": build_run_store(settings).health(),
-        "pgvector": vector_store.health() if vector_store is not None else False,
-        "redis": redis_health(settings.redis_url),
-        "falkordb": KGClient().health(),
-    }
-    print(json.dumps(status, indent=2, sort_keys=True))
-    return 0 if all(status.values()) else 1
+    uvicorn.run(
+        "src.api.main:app",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+    )
+    return 0
 
 
 if __name__ == "__main__":
