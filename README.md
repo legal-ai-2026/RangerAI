@@ -154,3 +154,6 @@ Read `AGENT.md` before substantial changes. It records project boundaries, PR re
 
 For cross-app shared data rules, canonical IDs, provenance requirements, and
 drift tracking, use `docs/shared-data-contract.md`.
+
+For frontend integration flows, endpoint usage, visibility boundaries, and UI
+state guidance, use `docs/frontend-integration.md`.
