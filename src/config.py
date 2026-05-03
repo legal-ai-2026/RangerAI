@@ -6,6 +6,12 @@ from dataclasses import dataclass, field
 from src.agent.models import MODEL_CLAUDE_SONNET, MODEL_OPENAI_MULTIMODAL, MODEL_OPENAI_WHISPER
 
 
+def csv_env(value: str | None) -> tuple[str, ...]:
+    if not value:
+        return ()
+    return tuple(item.strip() for item in value.split(",") if item.strip())
+
+
 def psycopg_dsn(url: str | None) -> str | None:
     if not url:
         return None
@@ -16,6 +22,11 @@ def psycopg_dsn(url: str | None) -> str | None:
 
 @dataclass(frozen=True)
 class Settings:
+    system1_api_key: str | None = field(default=os.getenv("SYSTEM1_API_KEY"), repr=False)
+    cors_allow_origins: tuple[str, ...] = field(
+        default_factory=lambda: csv_env(os.getenv("CORS_ALLOW_ORIGINS"))
+    )
+
     anthropic_api_key: str | None = field(default=os.getenv("ANTHROPIC_API_KEY"), repr=False)
     anthropic_model: str = os.getenv("ANTHROPIC_MODEL", MODEL_CLAUDE_SONNET)
     openai_api_key: str | None = field(default=os.getenv("OPENAI_API_KEY"), repr=False)

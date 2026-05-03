@@ -56,15 +56,22 @@ GET /v1/healthz
 configured. The response is safe to show in an operator view; it does not print
 secrets.
 
+If `SYSTEM1_API_KEY` is configured, include it on operational requests:
+
+```text
+X-API-Key: <configured value>
+```
+
 Current backend status:
 
 - No frontend code is hosted by this repository.
-- No auth middleware is implemented in this service yet.
+- Optional API-key middleware is available. Set `SYSTEM1_API_KEY` and send
+  `X-API-Key` on operational `/v1` requests. `/v1/healthz` remains unauthenticated
+  for readiness checks.
+- Optional CORS allowlisting is available. Set `CORS_ALLOW_ORIGINS` to a
+  comma-separated list such as `http://localhost:3000,https://frontend.example`.
 - Do not expose the API directly on a public network. Put it behind the
   frontend gateway, VPN, or another authenticated internal boundary.
-- CORS is not configured in this service. In development, proxy through the
-  frontend dev server or API gateway. Add explicit CORS middleware only as a
-  deliberate backend change.
 
 ## Primary Frontend Flows
 
@@ -514,7 +521,8 @@ Frontend must:
 - Redact or avoid displaying sensitive free-text where not needed.
 - Keep soldier-facing screens on `SoldierPerformanceReport`.
 - Never treat pending recommendations as approved actions.
-- Require an authenticated instructor/operator identity at the gateway layer.
+- Require an authenticated instructor/operator identity at the gateway layer or
+  configure `SYSTEM1_API_KEY` for this service in protected deployments.
 
 Backend currently:
 

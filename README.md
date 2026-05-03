@@ -38,6 +38,9 @@ Add the final connection values to your local environment before running the
 app. The exact values depend on your cluster and network setup:
 
 ```env
+SYSTEM1_API_KEY=
+CORS_ALLOW_ORIGINS=
+
 DATABASE_URL=
 PGVECTOR_CONNECTION_STRING=
 POSTGRES_HOST=

@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from collections.abc import Awaitable, Callable
+
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.responses import Response
 
 from src.agent.cache import redis_health
 from src.agent.dashboard import build_dashboard_summary
@@ -12,7 +17,7 @@ from src.agent.entities import (
 from src.agent.store import build_run_store
 from src.agent.vector_store import build_vector_store
 from src.agent.workflow import RangerWorkflow, compile_langgraph_probe
-from src.config import settings
+from src.config import Settings, settings
 from src.contracts import (
     ApprovalResponse,
     AuditEvent,
@@ -32,11 +37,41 @@ store = build_run_store()
 vector_store = build_vector_store()
 workflow = RangerWorkflow(store=store)
 
+
+def _install_cors(target_app: FastAPI, config: Settings) -> None:
+    if not config.cors_allow_origins:
+        return
+    target_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(config.cors_allow_origins),
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-API-Key"],
+    )
+
+
 app = FastAPI(
     title="C2D2 AVAI Ranger Agent",
     version="0.1.0",
     description="API-only deployable Ranger School adversarial training agent.",
 )
+
+_install_cors(app, settings)
+
+
+@app.middleware("http")
+async def require_api_key(
+    request: Request,
+    call_next: Callable[[Request], Awaitable[Response]],
+) -> Response:
+    if _requires_api_key(request):
+        provided = request.headers.get("x-api-key")
+        if provided != settings.system1_api_key:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "invalid or missing API key"},
+            )
+    return await call_next(request)
 
 
 @app.get("/v1/healthz")
@@ -212,3 +247,11 @@ def _run_id_for_recommendation(recommendation_id: str) -> str:
 def _validate_lookup_limit(limit: int) -> None:
     if limit < 1 or limit > 500:
         raise HTTPException(status_code=422, detail="limit must be between 1 and 500")
+
+
+def _requires_api_key(request: Request) -> bool:
+    if not settings.system1_api_key:
+        return False
+    if request.method == "OPTIONS":
+        return False
+    return request.url.path.startswith("/v1/") and request.url.path != "/v1/healthz"
