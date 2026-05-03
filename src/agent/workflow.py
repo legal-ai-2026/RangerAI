@@ -30,12 +30,13 @@ class RangerWorkflow:
         providers: ProviderClients | None = None,
         kg: KGClient | None = None,
         lease: RunLease | None = None,
+        graph: Any | None = None,
     ) -> None:
         self.store = store
         self.providers = providers or ProviderClients()
         self.kg = kg or KGClient()
         self.lease = lease or build_run_lease()
-        self.graph = build_ranger_graph(providers=self.providers, kg=self.kg)
+        self.graph = graph or build_ranger_graph(providers=self.providers, kg=self.kg)
 
     def create_run(self, ingest: IngestEnvelope) -> RunRecord:
         record = RunRecord(run_id=str(uuid4()), status=RunStatus.accepted, ingest=ingest)

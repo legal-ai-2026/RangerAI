@@ -44,7 +44,9 @@ class ProviderClients:
                     return self._deepgram_transcribe(audio_b64)
                 except Exception:
                     pass
-            raise ProviderError(f"STT failed and OpenAI fallback is not configured: {primary_error}")
+            raise ProviderError(
+                f"STT failed and OpenAI fallback is not configured: {primary_error}"
+            )
 
     async def ocr_pages(self, image_b64: list[str]) -> list[ORBookletPage]:
         pages: list[ORBookletPage] = []
@@ -198,8 +200,12 @@ class ProviderClients:
         response = client.ocr.process(model=MODEL_MISTRAL_OCR, document=document)
         markdown = "\n".join(page.markdown for page in response.pages)
         rows = [
-            ORBookletRow(task_code="OR-UNCERTAIN", task_name="OR booklet row", rating="UNCERTAIN",
-                         observation_note=markdown[:500])
+            ORBookletRow(
+                task_code="OR-UNCERTAIN",
+                task_name="OR booklet row",
+                rating="UNCERTAIN",
+                observation_note=markdown[:500],
+            )
         ]
         return ORBookletPage(rows=rows, confidence=0.75)
 
@@ -259,7 +265,9 @@ class ProviderClients:
             raise ProviderError("Claude did not return a JSON array")
         return parsed
 
-    def _anthropic_messages(self, messages: list[dict[str, Any]], max_tokens: int) -> dict[str, Any]:
+    def _anthropic_messages(
+        self, messages: list[dict[str, Any]], max_tokens: int
+    ) -> dict[str, Any]:
         if not self.settings.anthropic_api_key:
             raise ProviderError("ANTHROPIC_API_KEY is not configured")
         req = urllib.request.Request(
@@ -309,7 +317,9 @@ def heuristic_observations(text: str) -> list[Observation]:
             )
     if not observations and text.strip():
         observations.append(
-            Observation(soldier_id="UNKNOWN", task_code="UNMAPPED", note=text[:500], rating="UNCERTAIN")
+            Observation(
+                soldier_id="UNKNOWN", task_code="UNMAPPED", note=text[:500], rating="UNCERTAIN"
+            )
         )
     return observations
 

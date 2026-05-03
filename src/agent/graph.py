@@ -201,9 +201,9 @@ class RangerGraphNodes:
             "recommendations": records,
             "approval_decisions": [*state.get("approval_decisions", []), decision],
             "approval_complete": _all_decided(records),
-            "pending_approval_payload": None if _all_decided(records) else _pending_payload(
-                {**state, "recommendations": records}
-            ),
+            "pending_approval_payload": None
+            if _all_decided(records)
+            else _pending_payload({**state, "recommendations": records}),
             "status": RunStatus.completed if _all_decided(records) else RunStatus.pending_approval,
         }
 
@@ -226,7 +226,9 @@ class FallbackRangerGraph:
         self.nodes = RangerGraphNodes(providers=providers, kg=kg)
         self.checkpoints: dict[str, RangerState] = {}
 
-    async def ainvoke(self, input_data: RangerState | Any, config: dict[str, Any]) -> dict[str, Any]:
+    async def ainvoke(
+        self, input_data: RangerState | Any, config: dict[str, Any]
+    ) -> dict[str, Any]:
         thread_id = _thread_id(config)
         if _is_command(input_data):
             state = self.checkpoints[thread_id]
@@ -237,7 +239,9 @@ class FallbackRangerGraph:
                 "recommendations": records,
                 "approval_decisions": [*state.get("approval_decisions", []), decision],
                 "approval_complete": _all_decided(records),
-                "status": RunStatus.completed if _all_decided(records) else RunStatus.pending_approval,
+                "status": RunStatus.completed
+                if _all_decided(records)
+                else RunStatus.pending_approval,
             }
             if _all_decided(records):
                 state = _merge_state(state, await self.nodes.emit_node(state))

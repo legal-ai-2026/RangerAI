@@ -122,7 +122,9 @@ def decide_recommendation(
     decision: RecommendationDecision,
 ) -> ApprovalResponse:
     if decision.edited_recommendation is not None:
-        raise HTTPException(status_code=501, detail="edited recommendations are not implemented yet")
+        raise HTTPException(
+            status_code=501, detail="edited recommendations are not implemented yet"
+        )
     if decision.decision == "approve":
         return _approve_recommendation_by_id(recommendation_id)
     return _reject_recommendation_by_id(recommendation_id)

@@ -9,16 +9,13 @@ from src.config import Settings, settings
 
 class LeaseHandle(Protocol):
     @property
-    def acquired(self) -> bool:
-        ...
+    def acquired(self) -> bool: ...
 
-    def release(self) -> None:
-        ...
+    def release(self) -> None: ...
 
 
 class RunLease(Protocol):
-    def acquire(self, run_id: str) -> LeaseHandle:
-        ...
+    def acquire(self, run_id: str) -> LeaseHandle: ...
 
 
 @dataclass(frozen=True)

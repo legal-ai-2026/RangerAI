@@ -41,6 +41,7 @@ cache-dir = ".uv-cache"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+asyncio_default_fixture_loop_scope = "function"
 markers = [
     "live: tests that require live provider credentials and network access",
 ]

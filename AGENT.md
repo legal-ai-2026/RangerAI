@@ -39,7 +39,7 @@ Submit operationally valid `IngestEnvelope` payloads to `POST /v1/ingest`.
 uv run pytest
 uv run pytest tests/test_policy.py
 uv run ruff check . && uv run ruff format --check .
-uv run mypy src
+uv run --extra dev mypy src
 ```
 
 Add prompt regression tests under `tests/prompts/` before changing guardrails or model prompts.

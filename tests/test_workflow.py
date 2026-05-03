@@ -1,6 +1,7 @@
 import asyncio
 
 from src.agent.cache import InMemoryRunLease
+from src.agent.graph import FallbackRangerGraph
 from src.agent.store import InMemoryRunStore
 from src.agent.workflow import RangerWorkflow
 from src.api import main
@@ -33,9 +34,26 @@ class FakeProviders:
         return heuristic_recommendations(observations)
 
 
+def fake_workflow(
+    store: InMemoryRunStore,
+    providers: FakeProviders | None = None,
+    kg: FakeKG | None = None,
+    lease: InMemoryRunLease | None = None,
+) -> RangerWorkflow:
+    providers = providers or FakeProviders()
+    kg = kg or FakeKG()
+    return RangerWorkflow(
+        store=store,
+        providers=providers,
+        kg=kg,
+        lease=lease,
+        graph=FallbackRangerGraph(providers=providers, kg=kg),
+    )
+
+
 def test_ingest_to_approval_workflow() -> None:
     store = InMemoryRunStore()
-    workflow = RangerWorkflow(store=store, providers=FakeProviders(), kg=FakeKG())
+    workflow = fake_workflow(store)
     record = workflow.create_run(
         IngestEnvelope(
             instructor_id="ri-1",
@@ -71,14 +89,14 @@ def test_ingest_to_approval_workflow() -> None:
         "run_status_updated",
         "recommendation_decision_recorded",
     }.issubset(audit_event_types)
-    assert [
-        event.event_type for event in store.list_outbox_events(record.run_id)
-    ] == ["recommendation.approved"]
+    assert [event.event_type for event in store.list_outbox_events(record.run_id)] == [
+        "recommendation.approved"
+    ]
 
 
 def test_dashboard_summary_includes_soldier_metrics_and_recommendations() -> None:
     store = InMemoryRunStore()
-    workflow = RangerWorkflow(store=store, providers=FakeProviders(), kg=FakeKG())
+    workflow = fake_workflow(store)
     record = workflow.create_run(
         IngestEnvelope(
             instructor_id="ri-1",
@@ -108,7 +126,7 @@ def test_dashboard_summary_includes_soldier_metrics_and_recommendations() -> Non
 
 def test_v1_decision_rejects_pending_recommendation() -> None:
     store = InMemoryRunStore()
-    workflow = RangerWorkflow(store=store, providers=FakeProviders(), kg=FakeKG())
+    workflow = fake_workflow(store)
     previous_store = main.store
     previous_workflow = main.workflow
     try:
@@ -153,7 +171,7 @@ def test_api_exposes_only_versioned_operational_routes() -> None:
 def test_process_records_error_when_run_lease_is_held() -> None:
     store = InMemoryRunStore()
     leases = InMemoryRunLease()
-    workflow = RangerWorkflow(store=store, providers=FakeProviders(), kg=FakeKG(), lease=leases)
+    workflow = fake_workflow(store, lease=leases)
     record = workflow.create_run(
         IngestEnvelope(
             instructor_id="ri-1",

@@ -100,7 +100,13 @@ docker compose -f docker/compose.dev.yaml up -d
 uv run uvicorn src.api.main:app --reload --port 8001
 uv run pytest
 uv run ruff check .
-uv run mypy src
+uv run --extra dev mypy src
+```
+
+Run the full local gate:
+
+```bash
+make verify
 ```
 
 ## API Flow

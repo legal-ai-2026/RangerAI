@@ -43,9 +43,15 @@ def build_dashboard_summary(record: RunRecord) -> DashboardRunSummary:
         phase=record.ingest.phase,
         status=record.status,
         total_observations=len(record.observations),
-        pending_recommendations=sum(1 for item in record.recommendations if item.status == "pending"),
-        blocked_recommendations=sum(1 for item in record.recommendations if item.status == "blocked"),
-        approved_recommendations=sum(1 for item in record.recommendations if item.status == "approved"),
+        pending_recommendations=sum(
+            1 for item in record.recommendations if item.status == "pending"
+        ),
+        blocked_recommendations=sum(
+            1 for item in record.recommendations if item.status == "blocked"
+        ),
+        approved_recommendations=sum(
+            1 for item in record.recommendations if item.status == "approved"
+        ),
         platoon_readiness_score=platoon_score,
         soldiers=soldiers,
     )
@@ -63,9 +69,7 @@ def _soldier_summary(
     go_rate = round(go_count / total, 2) if total else 0.0
     readiness_score = _readiness_score(go_count, nogo_count, uncertain_count)
     active = [
-        item.recommendation
-        for item in recommendations
-        if item.status in {"pending", "approved"}
+        item.recommendation for item in recommendations if item.status in {"pending", "approved"}
     ]
     edges = sorted(
         {item.recommendation.development_edge for item in recommendations},
