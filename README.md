@@ -112,6 +112,12 @@ Run the full local gate:
 make verify
 ```
 
+Check configured infrastructure connectivity without printing credentials:
+
+```bash
+make infra-health
+```
+
 ## API Flow
 
 - `POST /v1/ingest` returns a run id and processes STT/OCR/extraction/reasoning in a background task.
