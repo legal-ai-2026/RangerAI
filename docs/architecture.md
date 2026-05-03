@@ -182,7 +182,11 @@ Every request should receive a `trace_id` that propagates to Langfuse and to a t
 
 ## Deployment Posture
 
-The app process runs outside the Kubernetes infrastructure stack and connects to managed or cluster-hosted Postgres/pgvector, Redis, FalkorDB, Langfuse, and audit storage. Later stages target GovCloud/IL5-compatible deployments.
+The app process can run locally or as a Kubernetes workload. In Kubernetes, keep
+the API deployment separate from the supporting infrastructure stack and connect
+to managed or cluster-hosted Postgres/pgvector, Redis, FalkorDB, Langfuse, and
+audit storage through explicit environment configuration. Later stages target
+GovCloud/IL5-compatible deployments.
 
 ## Deliberate Non-Goals
 

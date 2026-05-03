@@ -482,19 +482,7 @@ class PostgresRunStore:
                 """,
                 (run_id,),
             ).fetchall()
-        return [
-            OutboxEvent(
-                event_id=row[0],
-                event_type=row[1],
-                aggregate_id=row[2],
-                run_id=row[3],
-                trace_id=row[4],
-                payload=row[5],
-                status=row[6],
-                timestamp_utc=row[7],
-            )
-            for row in rows
-        ]
+        return [_outbox_event_from_row(row) for row in rows]
 
     def list_pending_outbox_events(self, limit: int = 100) -> list[OutboxEvent]:
         with self._connect() as conn:

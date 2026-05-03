@@ -4,9 +4,10 @@ API-only deployable implementation of System 1: a Ranger School adversarial trai
 
 ## Required Infrastructure Before Running
 
-The main FastAPI app is not deployed to Kubernetes. Kubernetes is expected to
-host only the supporting infrastructure that the app connects to from outside
-the cluster.
+The main FastAPI app can run locally or in Kubernetes. This repository includes
+a staging app manifest at `k8s/staging/deployment.yaml`; supporting
+infrastructure is still expected to be provisioned separately and reached
+through configured service names or connection strings.
 
 Before running the app, provision these services and make them reachable from
 the machine or runtime where the API process runs:
@@ -79,6 +80,28 @@ checkpointing and embedding ingestion are still pending.
 
 For local infrastructure only, use `docker/compose.dev.yaml`. The main app is
 started separately with `uvicorn`.
+
+## Kubernetes Staging Deployment
+
+Woodpecker builds and deploys the staging app on `main` branch pushes using
+`.woodpecker.yaml`. The pipeline runs lint and tests, builds the image with
+Kaniko, pushes `latest` and the short SHA tag to the cluster registry, replaces
+`IMAGE_TAG` in `k8s/staging/deployment.yaml`, applies the manifest, and waits
+for the rollout.
+
+Create the staging API secret before the first deploy:
+
+```bash
+kubectl -n staging create secret generic c2d2-avai-secrets \
+  --from-literal=SYSTEM1_API_KEY='replace-me'
+```
+
+Add provider and infrastructure keys to the same secret as needed, for example
+`OPENAI_API_KEY`, `DATABASE_URL`, `PGVECTOR_CONNECTION_STRING`,
+`POSTGRES_HOST`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`,
+`FALKORDB_URL`, `FALKORDB_USERNAME`, `FALKORDB_PASSWORD`, and Langfuse keys.
+The staging ConfigMap defaults to synthetic weather/terrain,
+`FALKORDB_HOST=falkordb`, and `REDIS_URL=redis://redis:6379/0`.
 
 ## Local Run
 

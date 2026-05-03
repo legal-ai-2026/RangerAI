@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import inspect
 import re
-from collections.abc import Awaitable, Callable
 from enum import Enum
 from typing import Any, Literal, TypedDict, cast
 
@@ -1006,6 +1005,3 @@ def _interrupt_payload(output: dict[str, Any]) -> dict[str, Any] | None:
     if isinstance(first, dict):
         return first.get("value")
     return getattr(first, "value", None)
-
-
-AsyncNode = Callable[[RangerState], Awaitable[dict[str, Any]]]

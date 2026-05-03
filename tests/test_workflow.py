@@ -300,6 +300,48 @@ def test_medium_risk_approval_requires_rationale_and_acknowledgement() -> None:
     assert audit_event.payload["acknowledged_review_requirements"] == [MEDIUM_RISK_ACK]
 
 
+def test_approval_uses_stored_run_when_graph_checkpoint_is_missing() -> None:
+    store = InMemoryRunStore()
+    original_workflow = fake_workflow(store)
+    record = original_workflow.create_run(
+        IngestEnvelope(
+            instructor_id="ri-1",
+            platoon_id="plt-1",
+            mission_id="m-1",
+            phase=Phase.mountain,
+            geo=GeoPoint(lat=35.0, lon=-83.0, grid_mgrs="17S"),
+            free_text="Jones blew Phase Line Bird.",
+        )
+    )
+    asyncio.run(original_workflow.process(record.run_id))
+    completed = store.get(record.run_id)
+    assert completed is not None
+    pending = next(item for item in completed.recommendations if item.status == "pending")
+
+    restarted_workflow = fake_workflow(store)
+    approval = restarted_workflow.approve(
+        completed.run_id,
+        pending.recommendation.recommendation_id,
+        approved=True,
+        decision_rationale="Instructor approved after process restart.",
+    )
+
+    assert approval.status == "approved"
+    updated = store.get(record.run_id)
+    assert updated is not None
+    approved = next(
+        item
+        for item in updated.recommendations
+        if item.recommendation.recommendation_id == pending.recommendation.recommendation_id
+    )
+    assert approved.status == "approved"
+    assert store.list_outbox_events(record.run_id)
+    assert any(
+        event.entity_id == pending.recommendation.recommendation_id
+        for event in store.list_update_events(entity_type="recommendation")
+    )
+
+
 def test_recommendation_context_includes_recent_kg_history() -> None:
     store = InMemoryRunStore()
     workflow = fake_workflow(store, kg=HistoryKG())

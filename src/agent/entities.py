@@ -6,6 +6,8 @@ from src.agent.calibration import (
     build_soldier_calibration_profile as _build_soldier_calibration_profile,
 )
 from src.agent.calibration import calibration_profile_summary, team_calibration_summary_for_runs
+from src.agent.locators import entity_id_from_locator
+from src.agent.metrics import metric_status, readiness_score
 from src.agent.store import RunStore
 from src.contracts import (
     DevelopmentEdgeTrajectory,
@@ -94,7 +96,7 @@ def build_soldier_performance_report(
     uncertain_count = sum(1 for item in observations if item.rating == "UNCERTAIN")
     total = len(observations)
     go_rate = round(go_count / total, 2) if total else 0.0
-    readiness_score = _readiness_score(go_count, nogo_count, uncertain_count)
+    score = readiness_score(go_count, nogo_count, uncertain_count)
     approved_count = len(approved)
     confidence = round(((total - uncertain_count) / total) * 100, 1) if total else 0.0
 
@@ -105,13 +107,13 @@ def build_soldier_performance_report(
         nogo_count=nogo_count,
         uncertain_count=uncertain_count,
         go_rate=go_rate,
-        readiness_score=readiness_score,
+        readiness_score=score,
         metrics=[
             PerformanceMetric(
                 name="Task performance",
                 value=round(go_rate * 100, 1),
                 max_value=100,
-                status=_metric_status(go_rate * 100),
+                status=metric_status(go_rate * 100),
             ),
             PerformanceMetric(
                 name="Instructor-approved development",
@@ -127,7 +129,7 @@ def build_soldier_performance_report(
                 name="Evaluation confidence",
                 value=confidence,
                 max_value=100,
-                status=_metric_status(confidence),
+                status=metric_status(confidence),
             ),
         ],
         development_edges=_approved_development_edges(approved),
@@ -188,7 +190,7 @@ def build_soldier_training_trajectory(
             1 for item in recommendations if item.status == "approved"
         ),
         go_rate=go_rate,
-        readiness_score=_readiness_score(go_count, nogo_count, uncertain_count),
+        readiness_score=readiness_score(go_count, nogo_count, uncertain_count),
         task_summaries=_task_trajectory_summaries(observations),
         development_edges=_development_edge_trajectories(recommendations),
         calibration_profile=calibration_profile_summary(calibration_signals),
@@ -490,7 +492,7 @@ def build_graph_subgraph(
                 )
             )
             for evidence_ref in recommendation.evidence_refs:
-                observation_id = _entity_id_from_locator(evidence_ref.ref, "Observation")
+                observation_id = entity_id_from_locator(evidence_ref.ref, "Observation")
                 if observation_id:
                     target_id = f"observation:{observation_id}"
                     add_edge(
@@ -700,14 +702,9 @@ def _soldier_guidance(item: EntityRecommendation) -> SoldierRecommendationGuidan
     )
 
 
-def _readiness_score(go_count: int, nogo_count: int, uncertain_count: int) -> float:
-    raw = 70 + (go_count * 10) - (nogo_count * 15) - (uncertain_count * 5)
-    return float(max(0, min(100, raw)))
-
-
 def _soldier_readiness(observations: list[EntityObservation], soldier_id: str) -> float:
     soldier_observations = [item for item in observations if item.soldier_id == soldier_id]
-    return _readiness_score(
+    return readiness_score(
         go_count=sum(1 for item in soldier_observations if item.rating == "GO"),
         nogo_count=sum(1 for item in soldier_observations if item.rating == "NOGO"),
         uncertain_count=sum(1 for item in soldier_observations if item.rating == "UNCERTAIN"),
@@ -730,21 +727,6 @@ def _runs_for_subgraph(
     if soldier_id:
         return store.list_runs_for_soldier(soldier_id, limit=limit)
     return store.list_recent_runs(limit=limit)
-
-
-def _entity_id_from_locator(locator: str, entity_type: str) -> str | None:
-    marker = f"/{entity_type}/"
-    if marker not in locator:
-        return None
-    return locator.split(marker, maxsplit=1)[1].split("#", maxsplit=1)[0] or None
-
-
-def _metric_status(value: float) -> Literal["strong", "watch", "critical"]:
-    if value >= 75:
-        return "strong"
-    if value >= 50:
-        return "watch"
-    return "critical"
 
 
 def _task_trajectory_summaries(

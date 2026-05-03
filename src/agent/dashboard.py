@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Literal
 
+from src.agent.metrics import metric_status, readiness_score
 from src.contracts import (
     DashboardRunSummary,
     Observation,
@@ -67,7 +67,7 @@ def _soldier_summary(
     uncertain_count = sum(1 for item in observations if item.rating == "UNCERTAIN")
     total = len(observations)
     go_rate = round(go_count / total, 2) if total else 0.0
-    readiness_score = _readiness_score(go_count, nogo_count, uncertain_count)
+    score = readiness_score(go_count, nogo_count, uncertain_count)
     active = [
         item.recommendation for item in recommendations if item.status in {"pending", "approved"}
     ]
@@ -82,13 +82,13 @@ def _soldier_summary(
         nogo_count=nogo_count,
         uncertain_count=uncertain_count,
         go_rate=go_rate,
-        readiness_score=readiness_score,
+        readiness_score=score,
         metrics=[
             PerformanceMetric(
                 name="Task performance",
                 value=round(go_rate * 100, 1),
                 max_value=100,
-                status=_metric_status(go_rate * 100),
+                status=metric_status(go_rate * 100),
             ),
             PerformanceMetric(
                 name="Development pressure",
@@ -100,22 +100,9 @@ def _soldier_summary(
                 name="Evaluation confidence",
                 value=round(((total - uncertain_count) / total) * 100, 1) if total else 0.0,
                 max_value=100,
-                status=_metric_status(((total - uncertain_count) / total) * 100 if total else 0),
+                status=metric_status(((total - uncertain_count) / total) * 100 if total else 0),
             ),
         ],
         development_edges=edges,
         active_recommendations=active,
     )
-
-
-def _readiness_score(go_count: int, nogo_count: int, uncertain_count: int) -> float:
-    raw = 70 + (go_count * 10) - (nogo_count * 15) - (uncertain_count * 5)
-    return float(max(0, min(100, raw)))
-
-
-def _metric_status(value: float) -> Literal["strong", "watch", "critical"]:
-    if value >= 75:
-        return "strong"
-    if value >= 50:
-        return "watch"
-    return "critical"

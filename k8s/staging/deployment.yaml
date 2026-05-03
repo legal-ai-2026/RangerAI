@@ -1,0 +1,207 @@
+# C2D2 AVAI Ranger Agent - staging
+# Namespace: staging
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: c2d2-avai-config
+  namespace: staging
+data:
+  CORS_ALLOW_ORIGINS: ""
+  WEATHER_PROVIDER: "synthetic"
+  TERRAIN_PROVIDER: "synthetic"
+  ENVIRONMENT_TIMEOUT_SECONDS: "3"
+  ALLOW_SYNTHETIC_ENVIRONMENT_FALLBACK: "true"
+  POSTGRES_PORT: "5432"
+  POSTGRES_SSLMODE: "require"
+  EMBEDDING_DIMENSIONS: "1536"
+  FALKORDB_HOST: "falkordb"
+  FALKORDB_PORT: "6379"
+  FALKORDB_GRAPH: "ranger"
+  REDIS_URL: "redis://redis:6379/0"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: c2d2-avai
+  namespace: staging
+  labels:
+    app: c2d2-avai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: c2d2-avai
+  template:
+    metadata:
+      labels:
+        app: c2d2-avai
+    spec:
+      containers:
+        - name: c2d2-avai
+          image: 192.168.0.247:5000/c2d2-avai:IMAGE_TAG
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8001
+              name: http
+          envFrom:
+            - configMapRef:
+                name: c2d2-avai-config
+          env:
+            - name: SYSTEM1_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: c2d2-avai-secrets
+                  key: SYSTEM1_API_KEY
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: c2d2-avai-secrets
+                  key: DATABASE_URL
+                  optional: true
+            - name: PGVECTOR_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: c2d2-avai-secrets
+                  key: PGVECTOR_CONNECTION_STRING
+                  optional: true
+            - name: POSTGRES_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: c2d2-avai-secrets
+                  key: POSTGRES_HOST
+                  optional: true
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: c2d2-avai-secrets
+                  key: POSTGRES_DB
+                  optional: true
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: c2d2-avai-secrets
+                  key: POSTGRES_USER
+                  optional: true
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: c2d2-avai-secrets
+                  key: POSTGRES_PASSWORD
+                  optional: true
+            - name: FALKORDB_URL
+              valueFrom:
+                secretKeyRef:
+                  name: c2d2-avai-secrets
+                  key: FALKORDB_URL
+                  optional: true
+            - name: FALKORDB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: c2d2-avai-secrets
+                  key: FALKORDB_USERNAME
+                  optional: true
+            - name: FALKORDB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: c2d2-avai-secrets
+                  key: FALKORDB_PASSWORD
+                  optional: true
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: c2d2-avai-secrets
+                  key: OPENAI_API_KEY
+                  optional: true
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: c2d2-avai-secrets
+                  key: ANTHROPIC_API_KEY
+                  optional: true
+            - name: DEEPGRAM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: c2d2-avai-secrets
+                  key: DEEPGRAM_API_KEY
+                  optional: true
+            - name: MISTRAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: c2d2-avai-secrets
+                  key: MISTRAL_API_KEY
+                  optional: true
+            - name: NWS_USER_AGENT
+              valueFrom:
+                secretKeyRef:
+                  name: c2d2-avai-secrets
+                  key: NWS_USER_AGENT
+                  optional: true
+            - name: OPENWEATHER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: c2d2-avai-secrets
+                  key: OPENWEATHER_API_KEY
+                  optional: true
+            - name: LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: c2d2-avai-secrets
+                  key: LANGFUSE_PUBLIC_KEY
+                  optional: true
+            - name: LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: c2d2-avai-secrets
+                  key: LANGFUSE_SECRET_KEY
+                  optional: true
+            - name: LANGFUSE_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: c2d2-avai-secrets
+                  key: LANGFUSE_HOST
+                  optional: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          livenessProbe:
+            httpGet:
+              path: /v1/healthz
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /v1/readyz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: c2d2-avai
+  namespace: staging
+  labels:
+    app: c2d2-avai
+  # Add metallb.universe.tf/loadBalancerIPs here after a dedicated IP is assigned.
+spec:
+  type: LoadBalancer
+  selector:
+    app: c2d2-avai
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8001

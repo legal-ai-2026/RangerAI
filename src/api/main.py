@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-import hashlib
-import json
 from uuid import uuid4
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
@@ -25,6 +23,7 @@ from src.agent.entities import (
     get_recommendation_entity,
     list_recent_recommendation_entities,
 )
+from src.agent.ledger import content_hash
 from src.agent.store import build_run_store
 from src.agent.vector_store import build_vector_store
 from src.agent.workflow import RangerWorkflow, compile_langgraph_probe
@@ -125,12 +124,7 @@ def healthz() -> dict[str, object]:
             "falkordb": falkordb_available,
         },
         "providers_configured": providers,
-        "openai_models": {
-            "stt": settings.openai_stt_model,
-            "multimodal": settings.openai_multimodal_model,
-            "extraction": settings.openai_extraction_model,
-            "reasoning": settings.openai_reasoning_model,
-        },
+        "openai_models": _openai_models(),
         "environment_providers": {
             "weather": settings.weather_provider,
             "terrain": settings.terrain_provider,
@@ -331,7 +325,7 @@ def record_recommendation_feedback(
                 trace_id=trace_id,
                 patch=payload,
                 source_refs=source_refs,
-                content_hash_after=_content_hash(payload),
+                content_hash_after=content_hash(payload),
             )
         )
         store.append_audit_event(
@@ -380,8 +374,7 @@ def get_graph_subgraph(
 
 @app.get("/v1/outbox", response_model=list[OutboxEvent])
 def list_pending_outbox_events(limit: int = 100) -> list[OutboxEvent]:
-    if limit < 1 or limit > 500:
-        raise HTTPException(status_code=422, detail="limit must be between 1 and 500")
+    _validate_lookup_limit(limit)
     return store.list_pending_outbox_events(limit=limit)
 
 
@@ -391,8 +384,7 @@ def list_update_ledger(
     entity_id: str | None = None,
     limit: int = 100,
 ) -> list[UpdateLedgerEntry]:
-    if limit < 1 or limit > 500:
-        raise HTTPException(status_code=422, detail="limit must be between 1 and 500")
+    _validate_lookup_limit(limit)
     return store.list_update_events(entity_type=entity_type, entity_id=entity_id, limit=limit)
 
 
@@ -422,7 +414,7 @@ def record_lessons_learned(
                 trace_id=trace_id,
                 patch=payload,
                 source_refs=source_refs,
-                content_hash_after=_content_hash(payload),
+                content_hash_after=content_hash(payload),
             )
         )
     return LessonsLearnedReceipt(
@@ -432,9 +424,10 @@ def record_lessons_learned(
     )
 
 
-def _approve_recommendation(
-    run_id: str,
+def _record_recommendation_decision(
     recommendation_id: str,
+    *,
+    approved: bool,
     edited_recommendation: ScenarioRecommendation | None = None,
     decision_rationale: str | None = None,
     acknowledged_review_requirements: list[str] | None = None,
@@ -442,9 +435,9 @@ def _approve_recommendation(
 ) -> ApprovalResponse:
     try:
         return workflow.approve(
-            run_id,
+            _run_id_for_recommendation(recommendation_id),
             recommendation_id,
-            approved=True,
+            approved=approved,
             edited_recommendation=edited_recommendation,
             decision_rationale=decision_rationale,
             acknowledged_review_requirements=acknowledged_review_requirements,
@@ -456,62 +449,6 @@ def _approve_recommendation(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-def _reject_recommendation(
-    run_id: str,
-    recommendation_id: str,
-    decision_rationale: str | None = None,
-    acknowledged_review_requirements: list[str] | None = None,
-    trace_id: str | None = None,
-) -> ApprovalResponse:
-    try:
-        return workflow.approve(
-            run_id,
-            recommendation_id,
-            approved=False,
-            decision_rationale=decision_rationale,
-            acknowledged_review_requirements=acknowledged_review_requirements,
-            trace_id=trace_id,
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
-def _approve_recommendation_by_id(
-    recommendation_id: str,
-    edited_recommendation: ScenarioRecommendation | None = None,
-    decision_rationale: str | None = None,
-    acknowledged_review_requirements: list[str] | None = None,
-    trace_id: str | None = None,
-) -> ApprovalResponse:
-    run_id = _run_id_for_recommendation(recommendation_id)
-    return _approve_recommendation(
-        run_id,
-        recommendation_id,
-        edited_recommendation,
-        decision_rationale,
-        acknowledged_review_requirements,
-        trace_id,
-    )
-
-
-def _reject_recommendation_by_id(
-    recommendation_id: str,
-    decision_rationale: str | None = None,
-    acknowledged_review_requirements: list[str] | None = None,
-    trace_id: str | None = None,
-) -> ApprovalResponse:
-    run_id = _run_id_for_recommendation(recommendation_id)
-    return _reject_recommendation(
-        run_id,
-        recommendation_id,
-        decision_rationale,
-        acknowledged_review_requirements,
-        trace_id,
-    )
-
-
 @app.post("/v1/recommendations/{recommendation_id}/decision", response_model=ApprovalResponse)
 def decide_recommendation(
     recommendation_id: str,
@@ -519,19 +456,14 @@ def decide_recommendation(
     request: Request,
 ) -> ApprovalResponse:
     trace_id = _trace_id(request)
-    if decision.decision == "approve":
-        return _approve_recommendation_by_id(
-            recommendation_id,
-            decision.edited_recommendation,
-            decision.decision_rationale,
-            decision.acknowledged_review_requirements,
-            trace_id,
-        )
-    return _reject_recommendation_by_id(
+    approved = decision.decision == "approve"
+    return _record_recommendation_decision(
         recommendation_id,
-        decision.decision_rationale,
-        decision.acknowledged_review_requirements,
-        trace_id,
+        approved=approved,
+        edited_recommendation=decision.edited_recommendation if approved else None,
+        decision_rationale=decision.decision_rationale,
+        acknowledged_review_requirements=decision.acknowledged_review_requirements,
+        trace_id=trace_id,
     )
 
 
@@ -582,6 +514,15 @@ def _provider_status() -> dict[str, bool]:
     }
 
 
+def _openai_models() -> dict[str, str]:
+    return {
+        "stt": settings.openai_stt_model,
+        "multimodal": settings.openai_multimodal_model,
+        "extraction": settings.openai_extraction_model,
+        "reasoning": settings.openai_reasoning_model,
+    }
+
+
 def _readiness_report() -> ReadinessReport:
     dependencies = [
         DependencyStatus(name="run_store", ok=store.health(), critical=True),
@@ -598,12 +539,7 @@ def _readiness_report() -> ReadinessReport:
         ok=all(item.ok for item in dependencies if item.critical),
         dependencies=dependencies,
         providers_configured=_provider_status(),
-        openai_models={
-            "stt": settings.openai_stt_model,
-            "multimodal": settings.openai_multimodal_model,
-            "extraction": settings.openai_extraction_model,
-            "reasoning": settings.openai_reasoning_model,
-        },
+        openai_models=_openai_models(),
     )
 
 
@@ -633,8 +569,3 @@ def _run_ids_for_recommendations(recommendation_ids: list[str]) -> list[str]:
         if run_id is not None:
             run_ids.append(run_id)
     return run_ids
-
-
-def _content_hash(payload: dict[str, object]) -> str:
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()

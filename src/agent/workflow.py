@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from typing import Any, Literal, cast
 from uuid import uuid4
 
@@ -11,8 +9,12 @@ from src.agent.decision_science import (
     approval_requires_rationale,
     missing_review_acknowledgements,
 )
+from src.agent.ledger import content_hash
 from src.agent.graph import (
+    ApprovalResume,
     RangerState,
+    _all_decided,
+    _apply_decision,
     build_ranger_graph,
     extract_state,
     make_resume_command,
@@ -199,11 +201,21 @@ class RangerWorkflow:
                     mode="json"
                 )
             command = make_resume_command(resume_payload)
-            output = self._invoke_resume(run_id, command)
-            updated = self._put_state(
-                run_id,
-                extract_state(output, graph=self.graph, config=self._graph_config(run_id)),
-            )
+            try:
+                output = self._invoke_resume(run_id, command)
+                updated = self._put_state(
+                    run_id,
+                    extract_state(output, graph=self.graph, config=self._graph_config(run_id)),
+                )
+            except KeyError:
+                updated = self._apply_stored_decision(
+                    record,
+                    recommendation_id=recommendation_id,
+                    approved=approved,
+                    edited_recommendation=edited_recommendation,
+                    decision_rationale=decision_rationale,
+                    acknowledged_review_requirements=acknowledged_review_requirements or [],
+                )
             for item in updated.recommendations:
                 if item.recommendation.recommendation_id == recommendation_id:
                     if item.status not in {"approved", "rejected"}:
@@ -316,6 +328,37 @@ class RangerWorkflow:
     def _graph_config(self, run_id: str) -> dict[str, Any]:
         return {"configurable": {"thread_id": run_id}}
 
+    def _apply_stored_decision(
+        self,
+        record: RunRecord,
+        *,
+        recommendation_id: str,
+        approved: bool,
+        edited_recommendation: ScenarioRecommendation | None,
+        decision_rationale: str | None,
+        acknowledged_review_requirements: list[str],
+    ) -> RunRecord:
+        decision: ApprovalResume = {
+            "recommendation_id": recommendation_id,
+            "decision": "approve" if approved else "reject",
+            "acknowledged_review_requirements": list(acknowledged_review_requirements),
+        }
+        if decision_rationale is not None:
+            decision["decision_rationale"] = decision_rationale
+        if edited_recommendation is not None:
+            decision["edited_recommendation"] = edited_recommendation
+
+        records = _apply_decision(
+            record.recommendations,
+            decision,
+            record.observations,
+            None,
+        )
+        record.recommendations = attach_calibration_support(records, self.store)
+        record.status = RunStatus.completed if _all_decided(records) else RunStatus.pending_approval
+        self.store.put(record)
+        return record
+
     def _append_observation_updates(
         self,
         record: RunRecord,
@@ -360,7 +403,7 @@ def _observation_update_event(
             f"postgres://ranger_runs/{run_id}#record.observations",
             f"falkor://{graph_name}/Observation/{observation.observation_id}",
         ],
-        content_hash_after=_content_hash(patch),
+        content_hash_after=content_hash(patch),
     )
 
 
@@ -422,10 +465,5 @@ def _recommendation_update_event(
             f"postgres://ranger_runs/{run_id}#record.recommendations",
             *[ref.ref for ref in recommendation.evidence_refs],
         ],
-        content_hash_after=_content_hash(patch),
+        content_hash_after=content_hash(patch),
     )
-
-
-def _content_hash(payload: dict[str, object]) -> str:
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()

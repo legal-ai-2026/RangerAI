@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from src.agent.locators import entity_id_from_locator
 from src.config import settings
 from src.contracts import IngestEnvelope, Observation, ScenarioRecommendation
 
@@ -154,7 +155,7 @@ class KGClient:
 def _observation_ids(recommendation: ScenarioRecommendation) -> list[str]:
     ids: list[str] = []
     for evidence_ref in recommendation.evidence_refs:
-        observation_id = _entity_id_from_locator(evidence_ref.ref, "Observation")
+        observation_id = entity_id_from_locator(evidence_ref.ref, "Observation")
         if observation_id and observation_id not in ids:
             ids.append(observation_id)
     return ids
@@ -165,14 +166,6 @@ def _task_codes(recommendation: ScenarioRecommendation) -> list[str]:
     if not task_code or task_code == "UNMAPPED":
         return []
     return [task_code]
-
-
-def _entity_id_from_locator(locator: str, entity_type: str) -> str | None:
-    marker = f"/{entity_type}/"
-    if marker not in locator:
-        return None
-    value = locator.split(marker, maxsplit=1)[1].split("#", maxsplit=1)[0]
-    return value or None
 
 
 def _query_rows(result: Any) -> list[Any]:

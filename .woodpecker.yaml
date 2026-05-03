@@ -1,0 +1,37 @@
+when:
+  branch: main
+  event: push
+
+steps:
+  - name: test
+    image: python:3.11-slim
+    commands:
+      - pip install --no-cache-dir uv==0.5.13
+      - uv sync --extra dev --frozen
+      - uv run ruff check .
+      - uv run ruff format --check .
+      - uv run pytest
+
+  - name: build-and-push
+    image: gcr.io/kaniko-project/executor:debug
+    depends_on: [test]
+    commands:
+      - /kaniko/executor --dockerfile=Dockerfile --context=. --destination=ci-cd-zot.ci-cd.svc.cluster.local:5000/c2d2-avai:latest --destination=ci-cd-zot.ci-cd.svc.cluster.local:5000/c2d2-avai:$(echo $CI_COMMIT_SHA | cut -c1-8) --insecure --skip-tls-verify
+
+  - name: deploy-staging
+    image: bitnami/kubectl:latest
+    depends_on: [build-and-push]
+    commands:
+      - export SHORT_SHA=$(echo $CI_COMMIT_SHA | cut -c1-8)
+      - kubectl config set-cluster homelab --server=$K8S_SERVER --insecure-skip-tls-verify=true
+      - kubectl config set-credentials deployer --token=$K8S_TOKEN
+      - kubectl config set-context homelab --cluster=homelab --user=deployer --namespace=staging
+      - kubectl config use-context homelab
+      - sed -i "s|IMAGE_TAG|$SHORT_SHA|g" k8s/staging/deployment.yaml
+      - kubectl apply -f k8s/staging/deployment.yaml
+      - kubectl rollout status deployment/c2d2-avai --namespace=staging --timeout=180s
+    environment:
+      K8S_TOKEN:
+        from_secret: K8S_TOKEN_STAGING
+      K8S_SERVER:
+        from_secret: K8S_SERVER
